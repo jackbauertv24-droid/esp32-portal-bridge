@@ -6,7 +6,7 @@
 
 #include "cJSON.h"
 
-void modem_at_start(void);
+void modem_uart_start(void);
 
 // Sends one AT command and returns all response lines (malloc'd, caller frees),
 // joined by '\n', with the final ERROR line included on failure. `ok` reports

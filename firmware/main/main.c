@@ -57,7 +57,7 @@ void app_main(void) {
   led_start();
   netmgr_start();
   web_start();
-  modem_at_start();
+  modem_uart_start();
   lte_start();
   portal_start();
   forward_start();

@@ -486,7 +486,7 @@ static void modem_task(void *arg) {
   }
 }
 
-void modem_at_start(void) {
+void modem_uart_start(void) {
   lock = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(modem_task, "modem_at", 12288, NULL, 5, NULL, 1);
 }
