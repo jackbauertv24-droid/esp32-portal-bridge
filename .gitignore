@@ -1,0 +1,6 @@
+build/
+firmware/portal_bridge/build/
+*.bin
+*.elf
+.vscode/
+local-notes.md
