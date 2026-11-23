@@ -15,6 +15,7 @@ until the first diagnostics report comes back.
 | Battery gauge | MAX17048 at I2C 0x36 | schematic + Waveshare demo | high |
 | Gauge I2C pins | SDA 15 / SCL 16 | Waveshare demo; one community repo says 3 / 2 | medium — both probed at boot, report says which answered |
 | USB routing | DIP switch on the back: USB-C to the USB-UART bridge (CH343) or to the modem | Waveshare docs | high |
+| 4G data | USB host PPP, VID 1E0E PID 9011, modem interface 5 | Espressif iot_usbh_modem supported-module table (A7670E-FASE, A7670M7_V1.11.1, ESP32-S3) | high for the module; untested on this board |
 | Power DIP switches | camera, USB hub, 4G module | Waveshare docs | high |
 
 ## Why GPIO33 is never touched

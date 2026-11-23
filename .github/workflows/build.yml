@@ -49,6 +49,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/project" -w /project/firmware "$IDF_IMAGE" bash -c '
             set -e
+            git config --global --add safe.directory "*"
             idf.py set-target esp32s3
             idf.py build
             cd build

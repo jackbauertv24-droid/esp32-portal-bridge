@@ -1,1 +1,308 @@
-<!doctype html><title>Portal Bridge</title><p>placeholder</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portal Bridge</title>
+<style>
+:root{--bg:#f5f6f8;--fg:#1b1f24;--card:#fff;--mut:#5f6b76;--line:#dfe3e8;--acc:#1f6feb;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700;--chip:#eef1f4}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--card:#161b22;--mut:#8b949e;--line:#30363d;--acc:#4493f8;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--chip:#21262d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line)}
+.top{display:flex;align-items:center;gap:10px;padding:10px 16px}
+.top b{font-size:16px}.top small{color:var(--mut);margin-left:auto;font-size:12px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mut);flex:none}
+nav{display:flex;overflow-x:auto;gap:2px;padding:0 10px}
+nav a{padding:9px 10px;color:var(--mut);text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
+nav a.on{color:var(--fg);border-color:var(--acc)}
+main{max-width:780px;margin:auto;padding:14px 16px 60px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+h2{font-size:15px;margin:0 0 10px}
+h3{font-size:14px;margin:16px 0 6px;color:var(--mut);font-weight:600}
+table{width:100%;border-collapse:collapse}
+td{padding:5px 0;vertical-align:top;border-bottom:1px solid var(--line);word-break:break-word}
+td:first-child{color:var(--mut);width:40%;padding-right:10px}
+tr:last-child td{border-bottom:0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.mut{color:var(--mut)}
+input,select,textarea{font:inherit;width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+textarea{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;min-height:220px}
+label{display:block;margin:12px 0 4px;font-weight:600;font-size:14px}
+.help{color:var(--mut);font-size:12.5px;margin-top:3px}
+button{font:inherit;padding:9px 14px;border:0;border-radius:8px;background:var(--acc);color:#fff;cursor:pointer;margin:8px 8px 0 0}
+button.sec{background:var(--chip);color:var(--fg);border:1px solid var(--line)}
+button.danger{background:var(--bad)}
+button:disabled{opacity:.5}
+.chk{display:flex;align-items:center;gap:8px;margin-top:12px}.chk input{width:auto}
+.msg{margin-top:10px;padding:9px 11px;border-radius:8px;background:var(--chip);white-space:pre-wrap;word-break:break-word}
+.msg:empty{display:none}
+pre{white-space:pre-wrap;word-break:break-all;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);padding:10px;border-radius:8px;max-height:65vh;overflow:auto;margin:8px 0 0}
+.sms{padding:9px 0;border-bottom:1px solid var(--line)}.sms:last-child{border:0}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;background:var(--chip);color:var(--mut);margin-left:6px}
+.ev{font-size:13px;padding:4px 0;border-bottom:1px solid var(--line)}.ev:last-child{border:0}
+.hidden{display:none}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+details summary{cursor:pointer;color:var(--acc);margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="top"><span class="dot" id="dot"></span><b>Portal Bridge</b><small id="fw"></small></div>
+  <nav id="nav">
+    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#settings">Settings</a><a href="#tools">Tools</a>
+  </nav>
+</header>
+<main>
+
+<section id="setup" class="hidden">
+  <div class="card">
+    <h2>First-time setup</h2>
+    <p>The board still uses the public default password. Choose your own before anything else. The board restarts afterwards; reconnect with the new hotspot name and password.</p>
+    <label>Admin password (user stays <b>admin</b>)</label><input id="su_adm" type="password" minlength="8" autocomplete="new-password">
+    <label>Hotspot name</label><input id="su_ssid" maxlength="32">
+    <label>Hotspot password (8–63 characters)</label><input id="su_ap" type="password" minlength="8" maxlength="63" autocomplete="new-password">
+    <button onclick="doSetup()">Save and restart</button>
+    <div class="msg" id="su_msg"></div>
+  </div>
+</section>
+
+<section id="p-status" class="hidden">
+  <div class="card"><h2>Internet</h2><table id="t_net"></table></div>
+  <div class="card"><h2>Login page</h2><table id="t_portal"></table>
+    <button onclick="go('portal')">Open login tools</button></div>
+  <div class="card"><h2>Modem &amp; SIM</h2><table id="t_modem"></table></div>
+  <div class="card"><h2>SMS forwarding</h2><table id="t_fwd"></table></div>
+  <div class="card"><h2>Board</h2><table id="t_board"></table></div>
+  <div class="card"><h2>Recent events</h2><div id="events" class="mut">–</div></div>
+</section>
+
+<section id="p-portal" class="hidden">
+  <div class="card">
+    <h2>Log in through the board (assisted)</h2>
+    <p>Opens the upstream login page <b>through the board</b>. Fill it in as usual, but you can type
+      <b>&lt;phone&gt;</b> in the number box and <b>&lt;code&gt;</b> in the code box: the board puts in the SIM's number and the code from the SMS it receives.
+      Everything is recorded. Because the board sends every request, the login unlocks the board for all devices.</p>
+    <label>Login page address</label><input id="mir_url" placeholder="detected automatically">
+    <div class="help">Leave empty to use the page found by the internet check.</div>
+    <button onclick="startMirror()">Open login page through the board</button>
+    <button class="sec" onclick="stopMirror()">Finish and keep the recording</button>
+    <div class="msg" id="mir_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Automatic login</h2>
+    <table id="t_portal2"></table>
+    <button onclick="loginNow()">Try automatic login now</button>
+    <div class="msg" id="login_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Recipe</h2>
+    <p class="mut">The saved steps the board replays to log in. Make one from a recording below, then review and save. Placeholders: {phone} {code} {portal_url} {form_action} {field:NAME} {cookie:NAME}.</p>
+    <textarea id="recipe" spellcheck="false" placeholder="No recipe saved. The board fills the form by itself."></textarea>
+    <button onclick="saveRecipe()">Save recipe</button><button class="sec" onclick="loadRecipe()">Reload</button><button class="danger" onclick="delRecipe()">Delete recipe</button>
+    <div class="msg" id="recipe_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Recordings</h2>
+    <div id="recs" class="mut">–</div>
+  </div>
+</section>
+
+<section id="p-sms" class="hidden">
+  <div class="card">
+    <h2>Messages saved on the board</h2>
+    <p class="mut">Every SMS the SIM receives is saved here first, then removed from the SIM (if that setting is on), then forwarded.</p>
+    <div id="smslist">Loading…</div>
+  </div>
+</section>
+
+<section id="p-settings" class="hidden">
+  <div id="settings_form"></div>
+  <div class="card" style="position:sticky;bottom:8px">
+    <button onclick="saveSettings()">Save settings</button>
+    <button class="sec hidden" id="btn_restart" onclick="reboot()">Restart now to apply</button>
+    <div class="msg" id="set_msg"></div>
+  </div>
+</section>
+
+<section id="p-tools" class="hidden">
+  <div class="card">
+    <h2>Send a report</h2>
+    <p class="mut">The report has status, settings (no passwords or tokens) and the device log. Phone numbers, IMEI and SIM IDs are masked; SMS text is not included.</p>
+    <div class="chk"><input type="checkbox" id="inc_rec" checked><span>Include the latest login-page recording</span></div>
+    <button onclick="reportGithub()">Send to GitHub issue</button>
+    <button class="sec" onclick="reportTelegram()">Send to Telegram</button>
+    <button class="sec" onclick="location.href='/api/report'">Download</button>
+    <div class="msg" id="rep_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Firmware update</h2>
+    <p class="mut">Choose the <b>-ota.bin</b> file from the GitHub release. If the new firmware fails to start, the board goes back to this one.</p>
+    <input type="file" id="fwfile" accept=".bin">
+    <button onclick="upload()">Install</button>
+    <div class="msg" id="fw_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Modem console</h2>
+    <div class="row"><input id="atcmd" value="AT+CSQ" autocapitalize="characters" autocomplete="off" style="flex:1"><button onclick="sendAt()">Send</button></div>
+    <pre id="atout" class="hidden"></pre>
+  </div>
+  <div class="card">
+    <h2>Device log</h2>
+    <button class="sec" onclick="showLog()">Show log</button>
+    <pre id="logout" class="hidden"></pre>
+  </div>
+  <div class="card">
+    <h2>Settings backup</h2>
+    <button class="sec" onclick="location.href='/api/settings/export'">Download backup (includes passwords)</button>
+    <label>Restore from backup</label><input type="file" id="bkfile" accept=".json">
+    <button class="sec" onclick="restore()">Restore</button>
+    <button class="danger" onclick="resetAll()">Reset all settings</button>
+    <div class="msg" id="bk_msg"></div>
+  </div>
+  <div class="card">
+    <button class="danger" onclick="reboot()">Restart board</button>
+  </div>
+</section>
+
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const row=(k,v,c)=>'<tr><td>'+k+'</td><td class="'+(c||'')+'">'+v+'</td></tr>';
+const ago=t=>{if(!t||t<1600000000)return '–';const s=Math.round(Date.now()/1000-t);return s<60?s+' s ago':s<3600?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago'};
+const dur=s=>s<60?s+' s':s<3600?Math.floor(s/60)+' min':Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min';
+async function api(path,opt){const r=await fetch(path,opt);if(r.status==403){showSetup();throw new Error('setup')}return r}
+async function jpost(path,body){const r=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:body==null?'':(typeof body=='string'?body:JSON.stringify(body))});return r.json()}
+function msg(id,t,cls){const e=$(id);e.textContent=t||'';e.className='msg '+(cls||'')}
+
+let st=null,schema=null,values=null,page='status';
+function go(p){location.hash=p}
+function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
+function route(){
+  page=(location.hash||'#status').slice(1);
+  if(!['status','portal','sms','settings','tools'].includes(page))page='status';
+  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
+  document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
+  if(st&&!st.board.setup_done)return showSetup();
+  if(page=='sms')loadSms();
+  if(page=='settings')loadSettings();
+  if(page=='portal'){loadRecipe();loadRecs();renderPortal()}
+}
+window.addEventListener('hashchange',route);
+
+async function tick(){
+  try{
+    const r=await fetch('/api/status');st=await r.json();
+    if(!st.board.setup_done){showSetup();if(!$('su_ssid').value)$('su_ssid').value=st.net.ap_ssid;return}
+    $('fw').textContent=st.board.fw+' · '+st.board.commit;
+    const n=st.net,m=st.modem,p=st.portal,l=st.lte;
+    $('dot').style.background=n.online?'var(--ok)':(n.wifi_state=='login page'?'var(--warn)':'var(--bad)');
+    $('t_net').innerHTML=row('Hotspot uses',n.uplink=='none'?'no uplink':(n.uplink=='4g'?'4G':'Wi-Fi')+(n.online?' · online':' · no internet'),n.online?'ok':'bad')
+      +row('Upstream Wi-Fi',n.wifi_connected?esc(n.wifi_ssid)+' ('+n.wifi_rssi+' dBm) · '+esc(n.wifi_state):'not connected',n.wifi_state=='online'?'ok':(n.wifi_state=='login page'?'warn':''))
+      +row('4G data',!l.enabled?'off in settings':(l.up?'connected · '+esc(n.lte_state)+' · up '+dur(l.up_s):'not connected'),l.up?'ok':'warn')
+      +row('Devices on hotspot',n.clients)+row('Admin address','http://'+esc(n.ap_ip)+'/');
+    renderPortal();
+    $('t_modem').innerHTML=row('Modem',m.alive?'answering':'not answering — check the 4G DIP switch',m.alive?'ok':'bad')
+      +(m.alive?row('SIM',esc(m.sim),m.sim=='READY'?'ok':'bad')+row('Operator',esc(m.operator||'–'))
+      +row('Signal',m.csq==99?'unknown':m.rssi_dbm+' dBm (CSQ '+m.csq+')',m.csq==99||m.csq<10?'warn':'ok')
+      +row('LTE',esc(m.lte_reg))+row('Number on SIM',esc(m.own_number||'not stored on SIM'))
+      +row('SMS saved since start',m.sms_saved_since_boot)+row('Radio',esc(m.radio))+row('Model',esc(m.model+' '+m.revision)):'');
+    const f=st.forward,fr=(k,name)=>{const c=f[k];return row(name,!c.enabled?'off':(c.error?'<span class="bad">'+esc(c.error)+'</span>':'ok')+' · sent '+c.sent+(c.pending?' · <b>'+c.pending+' waiting</b>':''))};
+    $('t_fwd').innerHTML=fr('tg','Telegram')+fr('wh','Webhook')+fr('mq','MQTT')+row('Messages on board',st.board.sms_stored);
+    const b=st.board,bt=st.battery;
+    $('t_board').innerHTML=row('Firmware',esc(b.fw+' ('+b.commit+', '+b.built+')'))+row('Up for',dur(b.uptime_s))+row('Last restart',esc(b.reset_reason),b.reset_reason.match(/crash|watchdog|brownout/)?'bad':'')
+      +row('Battery',bt.found?(bt.volts||0).toFixed(2)+' V · '+Math.round(bt.percent||0)+' %':'gauge not found')
+      +row('Memory free',b.heap_kb+' KB ('+b.internal_kb+' KB internal)')+row('Storage',b.storage_used_kb+' / '+b.storage_total_kb+' KB');
+    $('events').innerHTML=st.events.length?st.events.map(e=>'<div class="ev"><span class="mut">'+ago(e.t)+'</span> · '+esc(e.text)+'</div>').join(''):'none yet';
+  }catch(e){$('dot').style.background='var(--mut)'}
+}
+function renderPortal(){
+  if(!st)return;const p=st.portal,n=st.net,mi=st.mirror;
+  const h=row('Mode',esc(p.mode))+row('State',esc(p.state)+(mi.active?' · assisted session open':''))
+    +row('Login page',n.portal_url?esc(n.portal_url):'none detected')+row('Number used',p.phone?esc(p.phone):'<span class="bad">none — set it in Settings › Phone number</span>')
+    +row('Last attempt',ago(p.last_attempt)+(p.last_result?' · '+esc(p.last_result):''))+row('Attempts / passed',p.attempts+' / '+p.successes)
+    +row('Recipe',p.recipe_saved?'saved':'none (fills the form by itself)');
+  $('t_portal').innerHTML=h;$('t_portal2').innerHTML=h;
+}
+
+async function doSetup(){
+  const a=$('su_adm').value,s=$('su_ssid').value,p=$('su_ap').value;
+  if(a.length<8||p.length<8)return msg('su_msg','Passwords need at least 8 characters.','bad');
+  const r=await (await fetch('/api/setup',{method:'POST',body:JSON.stringify({adm_pass:a,ap_ssid:s,ap_pass:p})})).json();
+  msg('su_msg',r.message,r.ok?'ok':'bad');
+}
+
+async function loadSms(){
+  try{const a=await (await api('/api/sms?limit=200')).json();
+  $('smslist').innerHTML=a.length?a.map(m=>'<div class="sms"><b>'+esc(m.from)+'</b>'+(m.otp?'<span class="tag">login code</span>':'')+(m.parts>1?'<span class="tag">'+m.parts+' parts</span>':'')
+    +'<br><span class="mut">'+esc(m.sent)+'</span><div>'+esc(m.text).replace(/\n/g,'<br>')+'</div></div>').join(''):'No messages yet.';}catch(e){}
+}
+
+async function loadSettings(){
+  const d=await (await api('/api/settings')).json();schema=d.schema;values=d.values;
+  const groups=[];schema.forEach(s=>{if(!groups.includes(s.group))groups.push(s.group)});
+  let h='';
+  groups.forEach(g=>{
+    h+='<div class="card"><h2>'+esc(g)+'</h2>';
+    if(g=='Upstream Wi-Fi')h+='<button class="sec" onclick="scan()">Scan for networks</button><div id="scan" class="help"></div>';
+    schema.filter(s=>s.group==g).forEach(s=>{
+      const v=values[s.key]??'',id='s_'+s.key;
+      if(s.type=='bool')h+='<div class="chk"><input type="checkbox" id="'+id+'"'+(v=='1'?' checked':'')+'><span><b>'+esc(s.label)+'</b></span></div>';
+      else{h+='<label for="'+id+'">'+esc(s.label)+(s.reboot?' <span class="tag">restart</span>':'')+'</label>';
+        if(s.type=='enum')h+='<select id="'+id+'">'+s.options.split('|').map(o=>'<option'+(o==v?' selected':'')+'>'+esc(o)+'</option>').join('')+'</select>';
+        else h+='<input id="'+id+'" '+(s.type=='secret'?'type="password" autocomplete="new-password" ':'')+(s.type=='int'?'inputmode="numeric" ':'')+'value="'+esc(v)+'" placeholder="'+esc(s.def)+'">';}
+      if(s.help)h+='<div class="help">'+esc(s.help)+'</div>';
+    });
+    if(g=='Forwarding')h+='<h3>Check a channel (save first)</h3><button class="sec" onclick="ftest(\'tg\')">Test Telegram</button><button class="sec" onclick="ftest(\'wh\')">Test webhook</button><button class="sec" onclick="ftest(\'mq\')">Test MQTT</button><button class="sec" onclick="chats()">Find my Telegram chat id</button><div class="msg" id="fw_test"></div>';
+    h+='</div>';
+  });
+  $('settings_form').innerHTML=h;
+}
+async function saveSettings(){
+  const out={};schema.forEach(s=>{const e=$('s_'+s.key);if(!e)return;out[s.key]=s.type=='bool'?(e.checked?'1':'0'):e.value.trim()});
+  const r=await jpost('/api/settings',out);msg('set_msg',r.message,r.ok?'ok':'bad');
+  if(r.reboot)$('btn_restart').classList.remove('hidden');
+}
+async function scan(){$('scan').textContent='Scanning…';const a=await (await api('/api/wifi/scan')).json();
+  $('scan').innerHTML=a.length?a.sort((x,y)=>y.rssi-x.rssi).map(n=>esc(n.ssid||'(hidden)')+' · '+n.rssi+' dBm · ch '+n.channel+(n.open?' · open':'')).join('<br>'):'Nothing found.'}
+async function ftest(ch){msg('fw_test','Sending…');const r=await jpost('/api/forward/test?ch='+ch);msg('fw_test',r.message,r.ok?'ok':'bad')}
+async function chats(){msg('fw_test','Asking Telegram… (message your bot first)');const r=await (await api('/api/telegram/chats')).json();
+  msg('fw_test',r.error?r.error:(r.chats.length?r.chats.map(c=>c.name+': '+c.id).join('\n')+'\n\nPut the number in "Telegram: chat id" and save.':'No chats yet. Send any message to your bot in Telegram, then try again.'),r.error?'bad':'')}
+
+async function startMirror(){
+  const u=$('mir_url').value.trim();
+  location.href='/mirror/start'+(u?'?url='+encodeURIComponent(u):'');
+}
+async function stopMirror(){const r=await jpost('/mirror/stop');msg('mir_msg',r.recording?'Saved as '+r.recording+'. Use "Make recipe" on it below.':'No session was open.');loadRecs()}
+async function loginNow(){const r=await jpost('/api/portal/login');msg('login_msg',r.message)}
+async function loadRecipe(){try{const t=await (await api('/api/recipe')).text();$('recipe').value=t}catch(e){}}
+async function saveRecipe(){const r=await jpost('/api/recipe',$('recipe').value);msg('recipe_msg',r.message,r.ok?'ok':'bad')}
+async function delRecipe(){if(!confirm('Delete the saved recipe?'))return;const r=await jpost('/api/recipe/delete');msg('recipe_msg',r.message);$('recipe').value=''}
+async function loadRecs(){try{const a=await (await api('/api/recordings')).json();a.sort((x,y)=>y.seq-x.seq);
+  $('recs').innerHTML=a.length?a.map(r=>'<div class="sms"><b>'+esc(r.name)+'</b> <span class="mut">'+Math.round(r.bytes/1024)+' KB</span><br>'
+   +'<button class="sec" onclick="location.href=\'/api/recording?name='+encodeURIComponent(r.name)+'\'">Download</button>'
+   +'<button class="sec" onclick="mkRecipe(\''+esc(r.name)+'\')">Make recipe</button>'
+   +'<button class="danger" onclick="delRec(\''+esc(r.name)+'\')">Delete</button></div>').join(''):'No recordings yet.'}catch(e){}}
+async function mkRecipe(n){const r=await jpost('/api/recipe/from?name='+encodeURIComponent(n));
+  if(r.ok){$('recipe').value=r.recipe;msg('recipe_msg','Recipe built from '+n+'. Review it, then press Save recipe.')}else msg('recipe_msg',r.message,'bad');$('recipe').scrollIntoView()}
+async function delRec(n){if(!confirm('Delete '+n+'?'))return;await jpost('/api/recording/delete?name='+encodeURIComponent(n));loadRecs()}
+
+async function reportGithub(){msg('rep_msg','Sending… (needs internet and the GitHub token in Settings › Reports)');
+  const r=await jpost('/api/report/github?recording='+($('inc_rec').checked?'1':'0'));msg('rep_msg',r.message,r.ok?'ok':'bad')}
+async function reportTelegram(){msg('rep_msg','Sending…');const r=await jpost('/api/report/telegram');msg('rep_msg',r.message,r.ok?'ok':'bad')}
+async function upload(){const f=$('fwfile').files[0];if(!f)return msg('fw_msg','Choose the -ota.bin file first.','bad');
+  msg('fw_msg','Uploading '+Math.round(f.size/1024)+' KB… keep this page open.');
+  try{const r=await (await api('/api/update',{method:'POST',body:f})).json();msg('fw_msg',r.message,r.ok?'ok':'bad')}catch(e){msg('fw_msg','Upload failed: '+e,'bad')}}
+async function sendAt(){const c=$('atcmd').value.trim();if(!c)return;const o=$('atout');o.classList.remove('hidden');o.textContent='> '+c+'\n…\n'+o.textContent;
+  const r=await jpost('/api/at',{cmd:c});o.textContent='> '+c+'\n'+r.reply+(r.ok?'\nOK':'')+'\n\n'+o.textContent.replace(/^> .*\n…\n/,'')}
+$('atcmd').addEventListener('keydown',e=>{if(e.key=='Enter')sendAt()});
+async function showLog(){const o=$('logout');o.classList.remove('hidden');o.textContent='Loading…';o.textContent=await (await api('/api/log')).text();o.scrollTop=o.scrollHeight}
+async function restore(){const f=$('bkfile').files[0];if(!f)return msg('bk_msg','Choose a backup file.','bad');
+  const r=await jpost('/api/settings',await f.text());msg('bk_msg',r.message+(r.reboot?' Restart to apply everything.':''),r.ok?'ok':'bad')}
+async function resetAll(){if(!confirm('Reset ALL settings to defaults, including passwords? The SMS store is kept.'))return;const r=await jpost('/api/settings/reset');msg('bk_msg',r.message)}
+async function reboot(){if(!confirm('Restart the board?'))return;await fetch('/api/reboot',{method:'POST'});document.body.insertAdjacentHTML('afterbegin','<div class="msg" style="margin:12px">Restarting… reload in 30 seconds.</div>')}
+
+tick().then(route);setInterval(()=>{if(page=='status'||page=='portal')tick()},5000);
+</script>
+</body>
+</html>

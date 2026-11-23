@@ -3,3 +3,7 @@ dependencies:
   espressif/iot_usbh_modem: "2.2.0"
   espressif/iot_usbh_cdc: "3.1.1"
   espressif/led_strip: "3.1.1"
+  # iot_usbh_modem's public header includes modem_at and iot_eth headers but
+  # declares them as private dependencies, so they are declared here too.
+  espressif/modem_at: "0.1.0"
+  espressif/iot_eth: "1.1.0"

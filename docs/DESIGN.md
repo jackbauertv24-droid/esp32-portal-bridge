@@ -1,6 +1,6 @@
 # Design: 4G hotspot with captive-portal Wi-Fi sharing
 
-Status: **proposed**, awaiting confirmation before the firmware is rebuilt around it.
+Status: **implemented** in the ESP-IDF firmware (first hardware test pending). Data cap and usage counters from the original list are not implemented.
 
 ## Positioning
 
