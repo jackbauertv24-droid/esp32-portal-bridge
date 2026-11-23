@@ -28,21 +28,30 @@ Builds run on GitHub Actions (ESP-IDF 5.5); nothing is installed on a PC.
 
 ## Board switches (back side)
 
-- **4G** power DIP switch: **on**.
-- **USB** DIP switch: **modem ↔ ESP32** for normal use (needed for 4G data).
-  For the first flash over USB-C, set it to the ESP32's USB-to-UART instead, then
-  switch back.
-- Insert the SIM, attach the LTE antenna.
+Waveshare documents the DIP block as power switches for the **camera**, the **USB hub** and
+the **4G module**, plus a **USB route** switch for the modem: *4G USB ↔ Type-C* or
+*4G USB ↔ ESP32-S3*. The ESP32's own USB-to-UART chip (used for flashing and the serial
+log) sits behind the board's USB hub (CH334) on the Type-C port, so it should be reachable in
+both route positions (read from the schematic; the first flash confirms it).
+
+| Switch | Set to | Why |
+|---|---|---|
+| 4G | **ON** | powers the modem (SMS, 4G data) |
+| USB hub | **ON** | the Type-C port reaches the USB-to-UART chip through it (flashing, serial log) |
+| Camera | OFF | not used by this firmware; saves power |
+| USB route | **4G ↔ ESP32** | the firmware takes 4G data over this link; in the Type-C position a PC gets the modem instead and the board has no 4G data |
+
+Insert the SIM and attach the LTE antenna.
 
 ## First install (USB cable, once)
 
 1. Download `portal-bridge-<version>-full.bin` from the
    [latest release](../../releases/latest).
-2. Set the USB DIP switch to the ESP32 USB-to-UART, connect USB-C to a computer.
+2. Set the switches as in the table above and connect USB-C to a computer.
 3. Open <https://espressif.github.io/esptool-js/> in Chrome or Edge → **Connect** →
    choose the port → address **0x0** → the `-full.bin` file → **Program**.
    If it will not connect: hold **BOOT**, tap **RESET**, release **BOOT**, retry.
-4. Set the USB DIP switch back to **modem ↔ ESP32** and press **RESET**.
+4. Press **RESET**.
 
 Later versions: admin app → **Tools → Firmware update** → the `-ota.bin` file.
 
