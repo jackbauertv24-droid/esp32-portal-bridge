@@ -1,4 +1,4 @@
-// Host-side tests for the PDU decoder: gcc -I firmware/portal_bridge tests/test_sms_pdu.c firmware/portal_bridge/sms_pdu.c
+// Host-side tests for the PDU decoder: gcc -I firmware/core tests/test_sms_pdu.c firmware/core/sms_pdu.c
 //
 // The vectors were not hand-assembled: apart from the first (the widely used
 // developershome.com example) they were produced by the independent `node-pdu`
