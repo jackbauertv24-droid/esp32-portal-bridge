@@ -72,7 +72,16 @@ jobs:
       - name: Package
         run: |
           mkdir dist
-          cp out/portal_bridge.ino.merged.bin "dist/portal-bridge-${VERSION}-full.bin"
+          # The merged image is padded with 0xFF to the full 16 MB. Trailing padding
+          # carries no data, so cut it (to a 4 KB boundary) for a ~1 MB download.
+          python3 - out/portal_bridge.ino.merged.bin "dist/portal-bridge-${VERSION}-full.bin" <<'PY'
+          import sys
+          data = open(sys.argv[1], "rb").read()
+          end = len(data.rstrip(b"\xff"))
+          end = (end + 4095) // 4096 * 4096
+          open(sys.argv[2], "wb").write(data[:end])
+          print(f"merged image {len(data)} -> {end} bytes")
+          PY
           cp out/portal_bridge.ino.bin "dist/portal-bridge-${VERSION}-ota.bin"
           (cd dist && sha256sum *.bin > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
