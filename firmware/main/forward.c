@@ -28,7 +28,7 @@ typedef struct {
   unsigned sent;
 } chan_t;
 
-static chan_t chans[3] = {{"tg", "tg_en"}, {"wh", "wh_en"}, {"mq", "mq_en"}};
+static chan_t chans[3] = {{.key = "tg", .en = "tg_en"}, {.key = "wh", .en = "wh_en"}, {.key = "mq", .en = "mq_en"}};
 static TaskHandle_t task;
 
 // ---------- HTTP ----------
