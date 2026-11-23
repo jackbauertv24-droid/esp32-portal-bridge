@@ -31,3 +31,15 @@ risks corrupting memory. Waveshare's own demos do not use it.
 - Modem firmware revision (`AT+CGMR`), SMS service support (`AT+CSMS?`) and
   storage (`AT+CPMS?`) on a Hong Kong network, where SMS may only be available over LTE.
 - Which I2C pin pair the battery gauge answers on.
+
+## USB route DIP switch (position 4, printed only ON/OFF)
+
+Traced in the V1 schematic: DIP position 4 drives net `USB_SET`, which goes to `SEL`
+(pin 10) of the FSUSB42 USB switch (U12) and has a 47 kΩ pull-down (R65). The switch's
+common side is the 3.3 V rail. FSUSB42 pins: 1/2 `D+/D-` = modem USB, 4/5 `HSD1` = ESP32
+GPIO19/20 (via R56/R57), 6/7 `HSD2` = USB hub (CH334) → Type-C.
+
+- **OFF** → `SEL` low → `HSD1`: modem USB ↔ **ESP32** (what this firmware needs for 4G data)
+- **ON** → `SEL` high → `HSD2`: modem USB ↔ **Type-C** (a PC uses the board as a modem)
+
+Confidence: high from the schematic and the FSUSB42 truth table; not yet confirmed on a board.

@@ -39,7 +39,7 @@ both route positions (read from the schematic; the first flash confirms it).
 | 4G | **ON** | powers the modem (SMS, 4G data) |
 | USB hub | **ON** | the Type-C port reaches the USB-to-UART chip through it (flashing, serial log) |
 | Camera | OFF | not used by this firmware; saves power |
-| USB route | **4G ↔ ESP32** | the firmware takes 4G data over this link; in the Type-C position a PC gets the modem instead and the board has no 4G data |
+| USB route (labelled only ON/OFF) | **OFF** = modem USB ↔ ESP32 | the firmware takes 4G data over this link; in the ON position (modem USB ↔ Type-C) a PC gets the modem instead and the board has no 4G data |
 
 Insert the SIM and attach the LTE antenna.
 
