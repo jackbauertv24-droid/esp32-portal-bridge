@@ -22,6 +22,7 @@ static const usb_modem_id_t MODEMS[] = {
 
 static volatile bool up;
 static volatile bool enabled;
+static volatile bool installed;  // usbh_modem_get_netif() is only valid after install
 static char ip[16];
 static int64_t up_since_us;
 static unsigned up_count, lost_count;
@@ -67,6 +68,7 @@ static void lte_task(void *arg) {
     mc.pdp.apn = apn;
   }
   e = usbh_modem_install(&mc);
+  installed = (e == ESP_OK);
   devlog("lte: usb modem driver installed (%s), APN %s", esp_err_to_name(e), apn[0] ? apn : "(modem default)");
   // Report once if the modem never shows up on USB.
   vTaskDelay(pdMS_TO_TICKS(60000));
@@ -90,7 +92,7 @@ void lte_start(void) {
 
 bool lte_up(void) { return up; }
 
-esp_netif_t *lte_netif(void) { return enabled ? usbh_modem_get_netif() : NULL; }
+esp_netif_t *lte_netif(void) { return installed ? usbh_modem_get_netif() : NULL; }
 
 void lte_status_json(cJSON *root) {
   cJSON *o = cJSON_AddObjectToObject(root, "lte");
