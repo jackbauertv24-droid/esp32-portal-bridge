@@ -10,4 +10,4 @@ idf_component_register(
 # snprintf into fixed buffers is used deliberately for bounded copies.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)
 # Keep the lwIP route hook even though only lwIP references it.
-target_link_libraries(${COMPONENT_LIB} INTERFACE "-u pb_route_hook")
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-u pb_route_hook" "-u pb_input_hook")

@@ -19,6 +19,7 @@
 #include "freertos/task.h"
 #include "led.h"
 #include "lte.h"
+#include "meter.h"
 #include "modem_at.h"
 #include "netmgr.h"
 #include "nvs_flash.h"
@@ -52,6 +53,7 @@ void app_main(void) {
   cfg_set_runtime_default("ap_ssid", ssid);
 
   events_init();
+  meter_start();
   smsstore_init();
   battery_init();
   led_start();

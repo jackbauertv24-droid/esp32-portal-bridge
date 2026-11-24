@@ -18,6 +18,7 @@
 #include "html_form.h"
 #include "httpc.h"
 #include "lb.h"
+#include "meter.h"
 #include "lte.h"
 #include "settings.h"
 #include "urlutil.h"
@@ -34,6 +35,7 @@ static char ap_ip[16];
 static bool sntp_started;
 static int64_t last_wifi_probe_us, last_lte_probe_us;
 static unsigned sta_fail_streak;
+static int napt_on = 1;  // hotspot clients may reach the internet
 
 // ---------- hotspot ----------
 
@@ -48,6 +50,7 @@ static void apply_ap_ip(const char *ip) {
   esp_netif_dhcps_start(ap_if);
   esp_netif_napt_enable(ap_if);
   snprintf(ap_ip, sizeof(ap_ip), "%s", ip);
+  napt_on = 1;
 }
 
 // Hands the uplink's DNS server to hotspot clients via DHCP.
@@ -190,21 +193,26 @@ static void select_uplink(void) {
   char mode[20];
   cfg_get("up_mode", mode, sizeof(mode));
   esp_netif_t *ppp = lte_netif();
-  bool lte_ok = lte_up() && ppp && lte_state != NET_OFFLINE;
+  bool capped = meter_lte_blocked();  // data limit reached: 4G only for the board itself
+  bool lte_ok = lte_up() && ppp && lte_state != NET_OFFLINE && !capped;
+  bool lte_board = lte_up() && ppp && capped;
   bool wifi_ok = sta_has_ip && wifi_state == NET_ONLINE;
   esp_netif_t *sel = NULL;
   const char *name = "none";
   if (!strcmp(mode, "wifi")) {
     if (sta_has_ip) sel = sta_if, name = "wifi";
   } else if (!strcmp(mode, "4g")) {
-    if (lte_up() && ppp) sel = ppp, name = "4g";
+    if (lte_up() && ppp && !capped) sel = ppp, name = "4g";
+    else if (lte_board) sel = ppp, name = "4g-board";
   } else if (!strcmp(mode, "4g_then_wifi")) {
     if (lte_ok) sel = ppp, name = "4g";
     else if (sta_has_ip) sel = sta_if, name = "wifi";
+    else if (lte_board) sel = ppp, name = "4g-board";
   } else {  // wifi_then_4g
     if (wifi_ok) sel = sta_if, name = "wifi";
     else if (lte_ok) sel = ppp, name = "4g";
     else if (sta_has_ip) sel = sta_if, name = "wifi";
+    else if (lte_board) sel = ppp, name = "4g-board";
   }
   if (strcmp(name, uplink)) {
     event_post("Uplink: %s -> %s", uplink, name);
@@ -213,6 +221,15 @@ static void select_uplink(void) {
       esp_netif_set_default_netif(sel);
       offer_dns_from(sel);
     }
+  }
+  // At a 4G data limit with no Wi-Fi, hotspot devices are cut off (no NAT)
+  // while the board keeps 4G for its own alerts and SMS forwarding.
+  int want_napt = strcmp(uplink, "4g-board") != 0;
+  if (want_napt != napt_on) {
+    if (want_napt) esp_netif_napt_enable(ap_if);
+    else esp_netif_napt_disable(ap_if);
+    napt_on = want_napt;
+    event_post(want_napt ? "Hotspot devices have internet again" : "4G limit reached: hotspot devices are offline until Wi-Fi is available or you allow more 4G");
   }
   if (!sntp_started && sel && netmgr_online()) {
     char ntp[64];
@@ -258,7 +275,9 @@ static void net_task(void *arg) {
     select_uplink();
     char apip[16];
     netmgr_ap_ip(apip, sizeof(apip));
-    lb_update(sta_if, sta_has_ip && wifi_state == NET_ONLINE, lte_netif(), lte_up() && lte_state != NET_OFFLINE, apip);
+    meter_set_uplinks(sta_if, lte_netif());
+    lb_update(sta_if, sta_has_ip && wifi_state == NET_ONLINE, lte_netif(),
+              lte_up() && lte_state != NET_OFFLINE && !meter_lte_blocked(), apip);
     for (int i = 0; i < 20 && !recheck_now && !reconnect_now; i++) vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
@@ -322,7 +341,7 @@ void netmgr_ap_ip(char *out, size_t cap) { snprintf(out, cap, "%s", ap_ip); }
 
 bool netmgr_online(void) {
   if (!strcmp(uplink, "wifi")) return wifi_state == NET_ONLINE;
-  if (!strcmp(uplink, "4g")) return lte_up() && lte_state != NET_OFFLINE;
+  if (!strcmp(uplink, "4g") || !strcmp(uplink, "4g-board")) return lte_up() && lte_state != NET_OFFLINE;
   return false;
 }
 

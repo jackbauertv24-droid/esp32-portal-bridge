@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
 #include "debug.h"
+#include "meter.h"
 #include "mirror.h"
 #include "modem_at.h"
 #include "netmgr.h"
@@ -539,6 +540,20 @@ static esp_err_t h_update(httpd_req_t *req) {
   return ESP_OK;
 }
 
+static esp_err_t h_data_allow(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  meter_allow_until_midnight();
+  return send_result(req, true, "Hotspot may use 4G until midnight.");
+}
+
+static esp_err_t h_data_reset(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char scope[8];
+  query(req, "scope", scope, sizeof(scope));
+  meter_reset(!strcmp(scope, "all") ? "all" : "period");
+  return send_result(req, true, !strcmp(scope, "all") ? "All data counters cleared." : "This period's counters cleared.");
+}
+
 static esp_err_t h_reboot(httpd_req_t *req) {
   if (auth(req) != ESP_OK) return ESP_OK;
   send_result(req, true, "Restarting.");
@@ -610,6 +625,8 @@ void web_start(void) {
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},
+      {"/api/data/allow", HTTP_POST, h_data_allow},
+      {"/api/data/reset", HTTP_POST, h_data_reset},
   };
   for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
     httpd_uri_t u = {.uri = routes[i].uri, .method = routes[i].m, .handler = routes[i].h};

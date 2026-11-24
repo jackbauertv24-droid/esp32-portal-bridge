@@ -21,6 +21,7 @@
 #include "forward.h"
 #include "lb.h"
 #include "lte.h"
+#include "meter.h"
 #include "mirror.h"
 #include "modem_at.h"
 #include "netmgr.h"
@@ -67,6 +68,7 @@ cJSON *status_json(void) {
   netmgr_status_json(root);
   lte_status_json(root);
   lb_status_json(root);
+  meter_status_json(root);
   modem_status_json(root);
   portal_status_json(root);
   mirror_status_json(root);
@@ -130,6 +132,8 @@ char *report_build(void) {
   portal_summary(sum, 2048);
   put(&s, sum);
   forward_summary(sum, 2048);
+  put(&s, sum);
+  meter_summary(sum, 2048);
   put(&s, sum);
   free(sum);
 

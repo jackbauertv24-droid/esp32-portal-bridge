@@ -49,7 +49,7 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
 <header>
   <div class="top"><span class="dot" id="dot"></span><b>Portal Bridge</b><small id="fw"></small></div>
   <nav id="nav">
-    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
+    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
   </nav>
 </header>
 <main>
@@ -231,6 +231,36 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
     <div class="msg" id="btn_msg"></div>
   </div>
 </section>
+<section id="p-data" class="hidden">
+  <div class="card">
+    <h2>4G this billing period</h2>
+    <div id="dm_period"></div>
+    <div style="background:var(--chip);border-radius:6px;height:12px;margin:10px 0;overflow:hidden"><div id="dm_bar" style="height:100%;width:0;background:var(--ok)"></div></div>
+    <table id="dm_table"></table>
+    <div id="dm_block" class="hidden">
+      <div class="msg bad">Limit reached: hotspot devices are not using 4G.</div>
+      <button onclick="dataAllow()">Allow 4G until midnight</button>
+    </div>
+    <div class="msg" id="dm_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Last 31 days</h2>
+    <div class="help">Dark bars: 4G. Light bars: Wi-Fi. Tap a bar for the numbers.</div>
+    <div id="dm_days" style="display:flex;align-items:flex-end;gap:2px;height:140px;margin-top:10px"></div>
+    <div class="help" id="dm_day_pick"></div>
+  </div>
+  <div class="card">
+    <h2>Previous periods</h2>
+    <table id="dm_periods"></table>
+  </div>
+  <div class="card">
+    <h2>Limits and price</h2>
+    <p class="mut">Set them under <a href="#settings">Settings › Data &amp; budget</a>: monthly and daily 4G limits, billing day, warning level, price per GB, monthly budget, and whether to stop or only warn at a limit.</p>
+    <p class="mut">Counted at the board, so it matches your carrier only roughly; the "carrier overhead" setting adds a margin. Counters are saved every 5 minutes, so a power cut can lose a few minutes of counting.</p>
+    <button class="sec" onclick="dataReset('period')">Reset this period</button>
+    <button class="danger" onclick="dataReset('all')">Reset everything</button>
+  </div>
+</section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -247,11 +277,12 @@ function go(p){location.hash=p}
 function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
 function route(){
   page=(location.hash||'#status').slice(1);
-  if(!['status','portal','sms','settings','tools','debug'].includes(page))page='status';
+  if(!['status','portal','sms','data','settings','tools','debug'].includes(page))page='status';
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
   document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
   if(st&&!st.board.setup_done)return showSetup();
   if(page=='sms')loadSms();
+  if(page=='data')renderData();
   if(page=='settings')loadSettings();
   if(page=='portal'){loadRecipe();loadRecs();renderPortal()}
 }
@@ -264,7 +295,7 @@ async function tick(){
     $('fw').textContent=st.board.fw+' · '+st.board.commit;
     const n=st.net,m=st.modem,p=st.portal,l=st.lte;
     $('dot').style.background=n.online?'var(--ok)':(n.wifi_state=='login page'?'var(--warn)':'var(--bad)');
-    $('t_net').innerHTML=row('Hotspot uses',n.uplink=='none'?'no uplink':(n.uplink=='4g'?'4G':'Wi-Fi')+(n.online?' · online':' · no internet'),n.online?'ok':'bad')
+    $('t_net').innerHTML=row('Hotspot uses',n.uplink=='none'?'no uplink':n.uplink=='4g-board'?'nothing - 4G data limit reached':(n.uplink=='4g'?'4G':'Wi-Fi')+(n.online?' · online':' · no internet'),n.online&&n.uplink!='4g-board'?'ok':'bad')+(st.data?row('4G data this period',dataLine(st.data),st.data.blocked?'bad':''):'')
       +row('Upstream Wi-Fi',n.wifi_connected?esc(n.wifi_ssid)+' ('+n.wifi_rssi+' dBm) · '+esc(n.wifi_state):'not connected',n.wifi_state=='online'?'ok':(n.wifi_state=='login page'?'warn':''))
       +row('4G data',!l.enabled?'off in settings':(l.up?'connected · '+esc(n.lte_state)+' · up '+dur(l.up_s):'not connected'),l.up?'ok':'warn')
       +(st.lb?row('Wi-Fi + 4G together',st.lb.mode=='off'?'off':(st.lb.active?'active · Wi-Fi '+st.lb.wifi_pct+'% / 4G '+(100-st.lb.wifi_pct)+'% · packets '+st.lb.packets_wifi+' / '+st.lb.packets_4g:'on, waiting for both uplinks to be online'),st.lb.active?'ok':''):'')+row('Devices on hotspot',n.clients)+row('Admin address','http://'+esc(n.ap_ip)+'/');
@@ -476,7 +507,39 @@ async function buttonTest(){
   while(Date.now()<end&&!(down&&up)){const r=await dget("/api/debug/button");if(r.pressed)down=true;else if(down)up=true;await new Promise(r=>setTimeout(r,150))}
   msg("btn_msg",down?"PASS: BOOT button works.":"FAIL: no press seen.",down?"ok":"bad")}
 
-tick().then(route);setInterval(()=>{if(page=='status'||page=='portal')tick()},5000);
+const mb=v=>v>=1024?(v/1024).toFixed(2)+" GB":v.toFixed(v<10?2:0)+" MB";
+function money(d,v){return d.price_per_gb>0?d.currency+" "+v.toFixed(2):""}
+function dataLine(d){let t=mb(d.lte_period_mb);if(d.period_cap_mb)t+=" of "+mb(d.period_cap_mb)+" ("+Math.round(d.lte_period_mb*100/d.period_cap_mb)+"%)";
+  if(d.price_per_gb>0)t+=" · "+money(d,d.period_cost);if(d.blocked)t+=" · LIMIT REACHED";return t}
+function periodInfo(d){
+  if(!d.clock_ok||!d.period_key)return {text:"waiting for the clock (needs internet once)",elapsed:0,total:0};
+  const y=Math.floor(d.period_key/100),m=d.period_key%100-1,start=new Date(y,m,d.bill_day),end=new Date(y,m+1,d.bill_day);
+  const now=new Date(),total=(end-start)/864e5,elapsed=Math.max((now-start)/864e5,0.01);
+  return {text:start.toLocaleDateString()+" – "+new Date(end-864e5).toLocaleDateString()+" · "+Math.ceil(total-elapsed)+" days left",elapsed,total}}
+function renderData(){
+  if(!st||!st.data)return;const d=st.data,p=periodInfo(d);
+  $("dm_period").innerHTML='<div style="font-size:26px;font-weight:600">'+mb(d.lte_period_mb)+(d.period_cap_mb?' <span class="mut" style="font-size:15px">of '+mb(d.period_cap_mb)+'</span>':'')+'</div><div class="mut">'+esc(p.text)+'</div>';
+  const pct=d.period_cap_mb?Math.min(100,d.lte_period_mb*100/d.period_cap_mb):0;
+  $("dm_bar").style.width=(d.period_cap_mb?pct:0)+"%";$("dm_bar").style.background=pct>=100?"var(--bad)":pct>=d.warn_pct?"var(--warn)":"var(--ok)";
+  const proj=p.elapsed?d.lte_period_mb/p.elapsed*p.total:0;
+  $("dm_table").innerHTML=row("4G today",mb(d.lte_today_mb)+(d.day_cap_mb?" of "+mb(d.day_cap_mb):"")+(d.price_per_gb>0?" · "+money(d,d.today_cost):""))
+    +(d.price_per_gb>0?row("Cost this period",money(d,d.period_cost)+(d.budget>0?" of "+money(d,d.budget)+" budget":""),d.budget>0&&d.period_cost>=d.budget?"bad":""):"")
+    +(p.elapsed>1?row("At this rate, period ends at",mb(proj)+(d.price_per_gb>0?" · "+money(d,proj/1024*d.price_per_gb):""),d.period_cap_mb&&proj>d.period_cap_mb?"warn":""):"")
+    +row("Wi-Fi this period",mb(d.wifi_period_mb)+" (not billed)")+row("4G since first use",mb(d.lte_total_mb))
+    +row("At a limit",d.action=="stop"?"hotspot stops using 4G":"alert only")
+    +(d.allow_until*1000>Date.now()?row("Override","4G allowed until "+new Date(d.allow_until*1000).toLocaleTimeString(),"warn"):"");
+  $("dm_block").classList.toggle("hidden",!d.blocked);
+  const days=d.days.slice(0,31).reverse(),max=Math.max(1,...days.map(x=>x.lte_mb+x.wifi_mb));
+  $("dm_days").innerHTML=days.map(x=>{const k=String(x.day),lbl=k.length==8?k.slice(6)+"/"+k.slice(4,6):"?";
+    return '<div title="'+lbl+'" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;cursor:pointer" onclick="dayPick(\''+lbl+'\','+x.lte_mb+','+x.wifi_mb+')">'
+      +'<div style="background:var(--acc);opacity:.35;height:'+(x.wifi_mb/max*100)+'%"></div><div style="background:var(--acc);height:'+(x.lte_mb/max*100)+'%;min-height:'+(x.lte_mb>0?1:0)+'px"></div></div>'}).join("")||'<span class="mut">No data yet.</span>';
+  $("dm_periods").innerHTML=d.periods.length?d.periods.map(x=>row(String(x.period).slice(0,4)+"-"+String(x.period).slice(4),mb(x.lte_mb)+(d.price_per_gb>0?" · "+money(d,x.cost):""))).join(""):row("None yet","")}
+function dayPick(l,a,b){$("dm_day_pick").textContent=l+": 4G "+mb(a)+", Wi-Fi "+mb(b)}
+async function dataAllow(){const r=await jpost("/api/data/allow");msg("dm_msg",r.message,r.ok?"ok":"bad");await tick();renderData()}
+async function dataReset(s){if(!confirm(s=="all"?"Clear ALL data counters and history?":"Clear this period's counters?"))return;
+  const r=await jpost("/api/data/reset?scope="+s);msg("dm_msg",r.message,r.ok?"ok":"bad");await tick();renderData()}
+
+tick().then(route);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
 </script>
 </body>
 </html>

@@ -58,6 +58,16 @@ static const def_t DEFS[] = {
     {"probe_s", "Internet uplink", "Check interval (s)", NULL, T_INT, "30", 10, 600, NULL, false},
     {"lb_mode", "Internet uplink", "Use Wi-Fi and 4G together", "balance = when both are online, spread traffic over both. Each device+site pair sticks to one link, so a single download is not faster; many sites or several devices are. Uses 4G data even when Wi-Fi works.", T_ENUM, "off", 0, 0, "off|balance", false},
     {"lb_wifi_pct", "Internet uplink", "Share sent over Wi-Fi (%)", "The rest goes over 4G.", T_INT, "50", 10, 90, NULL, false},
+    // Data & budget
+    {"dm_cap_mb", "Data & budget", "Monthly 4G limit (MB)", "0 = no limit. 1 GB = 1024 MB.", T_INT, "0", 0, 10000000, NULL, false},
+    {"dm_day_mb", "Data & budget", "Daily 4G limit (MB)", "0 = no limit.", T_INT, "0", 0, 1000000, NULL, false},
+    {"dm_bill_day", "Data & budget", "Billing period starts on day", "Day of the month your plan resets (1-28).", T_INT, "1", 1, 28, NULL, false},
+    {"dm_warn_pct", "Data & budget", "Warn at (% of a limit)", "An alert is sent once per period through the forwarding channels.", T_INT, "80", 50, 99, NULL, false},
+    {"dm_action", "Data & budget", "When a limit is reached", "warn = alert only; stop = hotspot devices stop using 4G (Wi-Fi uplink still works; the board keeps 4G for its own alerts and SMS forwarding). Override from the Data page.", T_ENUM, "warn", 0, 0, "warn|stop", false},
+    {"dm_price", "Data & budget", "Price per GB", "For the cost estimate, e.g. 10 or 2.5. 0 = not tracked.", T_STR, "0", 1, 12, "decimal", false},
+    {"dm_budget", "Data & budget", "Monthly budget", "0 = none. With a price set, the budget also acts as a limit (budget / price = GB).", T_STR, "0", 1, 12, "decimal", false},
+    {"dm_curr", "Data & budget", "Currency", NULL, T_STR, "HKD", 1, 6, NULL, false},
+    {"dm_overhead", "Data & budget", "Carrier overhead (%)", "Added to measured 4G bytes, since carriers also bill protocol overhead. Raise it if your carrier's figure is higher.", T_INT, "3", 0, 20, NULL, false},
     // 4G
     {"lte_en", "4G", "Use 4G data", "Needs the USB DIP switch set to modem <-> ESP32.", T_BOOL, "1", 0, 0, NULL,
      true},
@@ -247,6 +257,11 @@ static esp_err_t validate(int i, const char *v, char *norm, size_t ncap, char *e
         if (!strcmp(d->options, "ip") && !valid_ip(v)) goto bad;
         if (!strcmp(d->options, "mac") && !valid_mac(v)) goto bad;
         if (!strcmp(d->options, "url") && strncmp(v, "http://", 7) && strncmp(v, "https://", 8)) goto bad;
+        if (!strcmp(d->options, "decimal")) {
+          char *end;
+          double x = strtod(v, &end);
+          if (*end || x < 0) goto bad;
+        }
         if (!strcmp(d->options, "digits"))
           for (const char *p = v; *p; p++)
             if (!isdigit((unsigned char)*p)) goto bad;
