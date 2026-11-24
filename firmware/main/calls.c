@@ -8,6 +8,7 @@
 #include "devlog.h"
 #include "esp_timer.h"
 #include "events.h"
+#include "memo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -16,8 +17,8 @@
 #include "settings.h"
 #include "textutil.h"
 
-typedef enum { C_IDLE, C_RINGING, C_PIN, C_ACTIVE } cstate_t;
-static const char *const STATE_NAME[] = {"idle", "ringing", "waiting for PIN", "connected"};
+typedef enum { C_IDLE, C_RINGING, C_PIN, C_ACTIVE, C_MEMO } cstate_t;
+static const char *const STATE_NAME[] = {"idle", "ringing", "waiting for PIN", "connected", "recording voice memo"};
 
 typedef struct {
   call_urc_t t;
@@ -46,6 +47,10 @@ static int log_next;
 // Brute-force guard: wrong-PIN calls in the last hour.
 static int64_t bad_calls_us[5];
 static int64_t locked_until_us;
+// Voice memo being recorded on the modem.
+static char memo_path[24];
+static int memo_seq;
+static int64_t memo_start_us, memo_until_us;
 
 static int64_t now_us(void) { return esp_timer_get_time(); }
 
@@ -96,8 +101,8 @@ static void add_log(const char *result) {
 static void finish(const char *result, bool hang_up) {
   if (hang_up) at("AT+CHUP");
   // Alerts only for calls auto-answer dealt with, not every missed call.
-  bool report = state == C_PIN || state == C_ACTIVE || (state == C_RINGING && cfg_bool("ca_en"));
-  if (state == C_PIN || state == C_ACTIVE) {
+  bool report = state == C_PIN || state == C_ACTIVE || state == C_MEMO || (state == C_RINGING && cfg_bool("ca_en"));
+  if (state == C_PIN || state == C_ACTIVE || state == C_MEMO) {
     set_mic(false);
     set_spk(false);
   }
@@ -131,6 +136,36 @@ static void note_bad_call(void) {
   }
 }
 
+// No PIN: the caller may leave a message, recorded by the modem from the
+// caller's side only (the board's microphone stays muted).
+static void start_memo(void) {
+  snprintf(memo_path, sizeof(memo_path), "C:/pbmemo%d.wav", memo_seq++ % 3);
+  modem_file_delete(memo_path);  // the modem may append to an old file
+  tones("1");
+  char c[48];
+  snprintf(c, sizeof(c), "AT+CREC=2,\"%s\"", memo_path);
+  if (!at(c)) {
+    finish("could not start recording a voice memo", true);
+    return;
+  }
+  state = C_MEMO;
+  memo_start_us = now_us();
+  memo_until_us = memo_start_us + (int64_t)cfg_int("cm_max_s") * 1000000;
+  devlog("calls: recording a voice memo");
+}
+
+static void stop_memo(bool hang_up) {
+  at("AT+CREC=0");
+  int secs = (int)((now_us() - memo_start_us) / 1000000);
+  char num[24], res[48];
+  snprintf(num, sizeof(num), "%s", number);
+  if (hang_up) tones("1");
+  snprintf(res, sizeof(res), "voice memo recorded (%d s)", secs);
+  finish(secs >= 2 ? res : "voice memo too short, discarded", hang_up);
+  if (secs >= 2) memo_add(memo_path, num, secs);
+  else modem_file_delete(memo_path);
+}
+
 // Decides whether to pick up once enough rings have passed.
 static void maybe_answer(void) {
   decided = true;
@@ -138,7 +173,8 @@ static void maybe_answer(void) {
   char pin[12], allowed[128];
   cfg_get("ca_pin", pin, sizeof(pin));
   cfg_get("ca_from", allowed, sizeof(allowed));
-  if (strlen(pin) != 6) {
+  bool memo = cfg_bool("cm_en"), has_pin = strlen(pin) == 6;
+  if (!has_pin && !memo) {
     devlog("calls: not answering, no 6-digit PIN set");
     return;
   }
@@ -170,6 +206,11 @@ static void maybe_answer(void) {
   answered_us = now_us();
   pin_until_us = answered_us + (int64_t)cfg_int("ca_pin_s") * 1000000;
   keys_seen = 0;
+  if (!has_pin) {
+    devlog("calls: answered for a voice memo (no PIN set)");
+    start_memo();
+    return;
+  }
   devlog("calls: answered, waiting for the PIN (all audio muted)");
 }
 
@@ -226,9 +267,13 @@ static void task(void *arg) {
           break;
         case CU_END:
         case CU_MISSED:
-          if (state == C_ACTIVE) finish("call ended", false);
+          if (state == C_MEMO) stop_memo(false);
+          else if (state == C_ACTIVE) finish("call ended", false);
           else if (state == C_PIN) finish("caller hung up before the PIN", false);
           else if (state == C_RINGING) finish(cfg_bool("ca_en") ? "not answered" : "missed (auto-answer off)", false);
+          break;
+        case CU_REC_FULL:
+          if (state == C_MEMO) stop_memo(true);
           break;
         default:
           break;
@@ -240,10 +285,15 @@ static void task(void *arg) {
       // Rings come every few seconds; silence means the caller gave up.
       else if (state == C_RINGING && t - last_ring_us > 10LL * 1000000)
         finish(cfg_bool("ca_en") ? "not answered" : "missed (auto-answer off)", false);
+    } else if (state == C_PIN && cfg_bool("cm_en") &&
+               ((keys_seen == 0 && t - answered_us > (int64_t)cfg_int("cm_wait_s") * 1000000) || t > pin_until_us)) {
+      start_memo();  // no PIN: let the caller leave a message
     } else if (state == C_PIN && t > pin_until_us) {
       tones("000");
       note_bad_call();
       finish(keys_seen ? "PIN not completed in time, hung up" : "no keys received, hung up", true);
+    } else if (state == C_MEMO && t > memo_until_us) {
+      stop_memo(true);
     } else if (state == C_ACTIVE) {
       int max_min = cfg_int("ca_max_min");
       if (max_min > 0 && t - unlocked_us > (int64_t)max_min * 60 * 1000000) finish("time limit reached, hung up", true);
@@ -258,7 +308,7 @@ void calls_start(void) {
 }
 
 bool calls_action(const char *a, char *msg, size_t cap) {
-  if (state != C_PIN && state != C_ACTIVE) {
+  if (state != C_PIN && state != C_ACTIVE && state != C_MEMO) {
     snprintf(msg, cap, "No call in progress.");
     return false;
   }

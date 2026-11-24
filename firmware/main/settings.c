@@ -79,6 +79,14 @@ static const def_t DEFS[] = {
     {"ca_mute", "Calls", "Key sequence: caller mutes the board speaker", NULL, T_STR, "*0", 1, 6, "dtmf", false},
     {"ca_max_min", "Calls", "Longest call (min)", "0 = no limit.", T_INT, "0", 0, 600, NULL, false},
     {"ca_tones", "Calls", "Beep to the caller", "One beep when the PIN is accepted, three when it is wrong.", T_BOOL, "1", 0, 0, NULL, false},
+    // Voice memos
+    {"cm_en", "Calls", "Voice memo when no PIN is entered", "A caller who types nothing for the wait below (or does not finish the PIN in time) can leave a message; only the caller's voice is recorded, the board's microphone stays muted. Works with no PIN set too (memos only). The caller hears a beep when recording starts, if the modem passes it through.", T_BOOL, "0", 0, 0, NULL, false},
+    {"cm_wait_s", "Calls", "Voice memo: start after (s) without a key", NULL, T_INT, "8", 3, 60, NULL, false},
+    {"cm_max_s", "Calls", "Voice memo: longest (s)", "The modem stops at about 80 s.", T_INT, "60", 5, 80, NULL, false},
+    {"cm_dest", "Calls", "Voice memo: deliver to", "telegram = the bot under Forwarding; webhook = POST of the WAV file; board = only kept here (Status page). Undelivered memos are retried every 5 minutes.", T_ENUM, "telegram", 0, 0, "telegram|webhook|both|board", false},
+    {"cm_tg_chat", "Calls", "Voice memo: Telegram chat id", "Empty = the forwarding chat.", T_STR, "", 0, 32, NULL, false},
+    {"cm_wh_url", "Calls", "Voice memo: webhook URL", "Receives the WAV as the request body, with the forwarding webhook's auth header and X-Caller. Empty = the forwarding webhook URL.", T_STR, "", 0, 250, NULL, false},
+    {"cm_keep", "Calls", "Voice memo: keep on the board", "Oldest are deleted beyond this many.", T_INT, "10", 1, 25, NULL, false},
     // Tracker
     {"tr_en", "Tracker", "Record position and signal", "Turns the modem's GNSS on and logs a point every interval to the board's flash (Tracker page). Needs the GNSS antenna.", T_BOOL, "0", 0, 0, NULL, false},
     {"tr_int_s", "Tracker", "Interval (s)", NULL, T_INT, "60", 10, 3600, NULL, false},

@@ -29,6 +29,8 @@ int main(void) {
   CHECK("end", call_urc_parse("VOICE CALL: END: 000012", a, sizeof a) == CU_END);
   CHECK("no carrier", call_urc_parse("NO CARRIER", a, sizeof a) == CU_END);
   CHECK("missed", call_urc_parse("MISSED_CALL: 10:15AM 91234567", a, sizeof a) == CU_MISSED);
+  CHECK("recording full", call_urc_parse("+CREC: file full", a, sizeof a) == CU_REC_FULL);
+  CHECK("recording reply is not a notification", call_urc_parse("+CREC: 2", a, sizeof a) == CU_NONE);
   CHECK("rxdtmf", call_urc_parse("+RXDTMF: 5", a, sizeof a) == CU_DTMF && a[0] == '5');
   CHECK("dtmf no space", call_urc_parse("+DTMF:#", a, sizeof a) == CU_DTMF && a[0] == '#');
   CHECK("dtmf quoted", call_urc_parse("+RXDTMF: \"*\"", a, sizeof a) == CU_DTMF && a[0] == '*');

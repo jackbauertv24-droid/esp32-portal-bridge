@@ -74,7 +74,8 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
   <div class="card"><h2>Calls</h2><table id="t_calls"></table>
     <div id="calls_ctl" class="hidden"><button class="danger" onclick="callAct('hangup')">Hang up</button><button class="sec" id="cl_mic" onclick="callAct(this.dataset.a)">Mute microphone</button><button class="sec" id="cl_spk" onclick="callAct(this.dataset.a)">Unmute speaker</button></div>
     <div class="msg" id="calls_msg"></div>
-    <details><summary>Recent calls</summary><div id="calls_log"></div></details></div>
+    <details><summary>Recent calls</summary><div id="calls_log"></div></details>
+    <details id="memo_box"><summary id="memo_sum">Voice memos</summary><div id="memos"></div></details></div>
   <div class="card"><h2>SMS forwarding</h2><table id="t_fwd"></table></div>
   <div class="card"><h2>Board</h2><table id="t_board"></table></div>
   <div class="card"><h2>Recent events</h2><div id="events" class="mut">–</div></div>
@@ -783,7 +784,7 @@ function trackExport(kind){const d=$("tr_day").value;if(!d)return;
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([gpx],{type:"application/gpx+xml"}));a.download="track-"+d+".gpx";a.click()}
 
 async function loadCalls(){
-  try{const c=await (await api("/api/calls")).json(),live=c.state=="waiting for PIN"||c.state=="connected";
+  try{const c=await (await api("/api/calls")).json(),live=c.state=="waiting for PIN"||c.state=="connected"||c.state=="recording voice memo";
     let h=row("Auto-answer",!c.enabled?'off (<a href="#settings">Settings › Calls</a>)':!c.pin_set?'<span class="bad">on, but no 6-digit PIN set: calls are not answered</span>':"on, PIN required",c.enabled&&c.pin_set?"ok":"")
       +(c.locked_s?row("Locked",'too many wrong PINs; answering again in '+dur(c.locked_s),"bad"):"")
       +row("Now",c.state=="idle"?"no call":esc(c.state)+(c.number?" · "+esc(c.number):"")+(c.state=="ringing"?" · "+c.rings+" rings":"")+(live?" · "+dur(c.seconds):""),live?"warn":"");
@@ -792,7 +793,19 @@ async function loadCalls(){
     $("t_calls").innerHTML=h;$("calls_ctl").classList.toggle("hidden",!live);
     if(live){$("cl_mic").textContent=c.mic_muted?"Unmute microphone":"Mute microphone";$("cl_mic").dataset.a=c.mic_muted?"mic_on":"mic_off";
       $("cl_spk").textContent=c.spk_muted?"Unmute speaker":"Mute speaker";$("cl_spk").dataset.a=c.spk_muted?"spk_on":"spk_off"}
-    $("calls_log").innerHTML=c.log.length?c.log.map(l=>'<div class="ev"><span class="mut">'+ago(l.t)+'</span> · '+esc(l.number)+' · '+esc(l.result)+(l.seconds?' · '+dur(l.seconds):'')+'</div>').join(""):'<span class="mut">No calls since the board started.</span>'}catch(e){}}
+    $("calls_log").innerHTML=c.log.length?c.log.map(l=>'<div class="ev"><span class="mut">'+ago(l.t)+'</span> · '+esc(l.number)+' · '+esc(l.result)+(l.seconds?' · '+dur(l.seconds):'')+'</div>').join(""):'<span class="mut">No calls since the board started.</span>';
+    loadMemos()}catch(e){}}
+let memoSig="";
+async function loadMemos(){
+  try{const a=await (await api("/api/memos")).json(),sig=JSON.stringify(a);if(sig==memoSig)return;memoSig=sig;
+    const fresh=a.filter(x=>x.state=="saved").length;$("memo_sum").textContent="Voice memos"+(a.length?" ("+a.length+")":"");
+    $("memos").innerHTML=a.length?a.map(x=>'<div class="sms"><b>'+esc(x.number||"hidden number")+'</b> <span class="mut">'+ago(x.t)+' · '+x.secs+' s'+(x.bytes?' · '+fmtB(x.bytes):'')+'</span>'
+      +(x.state=="copying"?'<span class="tag">copying from the modem…</span>':x.state=="failed"?'<span class="tag bad">failed</span>':x.delivered?'<span class="tag ok">delivered</span>':'<span class="tag warn">not delivered yet</span>')
+      +(x.result?'<div class="help">'+esc(x.result)+'</div>':'')
+      +(x.state=="saved"?'<audio controls preload="none" style="width:100%;margin-top:6px" src="/api/memo?id='+x.id+'"></audio>':'')
+      +'<div class="row">'+(x.state=="saved"?'<button class="sec" onclick="location.href=\'/api/memo?id='+x.id+'&download=1\'">Download</button><button class="sec" onclick="memoAct(\'resend\','+x.id+')">Send again</button>':'')
+      +'<button class="danger" onclick="memoAct(\'delete\','+x.id+')">Delete</button></div></div>').join(""):'<span class="mut">No voice memos. Turn them on under Settings › Calls.</span>'}catch(e){}}
+async function memoAct(a,id){if(a=="delete"&&!confirm("Delete this voice memo?"))return;const r=await jpost("/api/memos",{action:a,id});msg("calls_msg",r.message,r.ok?"ok":"bad");memoSig="";loadMemos()}
 async function callAct(a){const r=await jpost("/api/calls",{action:a});msg("calls_msg",r.message,r.ok?"ok":"bad");loadCalls()}
 
 tick().then(route);setInterval(()=>{if(page=='devices')loadDevices();if(page=='status')loadCalls()},3000);setInterval(()=>{if(page=='tracker')loadTracker()},15000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);

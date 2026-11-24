@@ -3,6 +3,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #include "cJSON.h"
 
@@ -14,6 +15,12 @@ void modem_uart_start(void);
 char *modem_cmd(const char *cmd, int timeout_ms, bool *ok);
 
 bool modem_alive(void);
+// Copies a file from the modem's flash (e.g. "C:/memo.wav") into `out`,
+// in chunks so other modem work can run in between. Returns bytes copied or
+// -1 with a reason in err.
+long modem_file_read(const char *path, FILE *out, char *err, size_t errcap);
+// Deletes a file on the modem's flash (errors ignored).
+void modem_file_delete(const char *path);
 // Latest radio readings from the periodic status refresh: CSQ (99 = unknown),
 // operator name and the raw AT+CPSI line (any pointer may be NULL).
 void modem_radio(int *csq, char *oper, size_t ocap, char *cpsi, size_t ccap);

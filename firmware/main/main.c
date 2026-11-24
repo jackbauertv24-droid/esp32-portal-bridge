@@ -7,6 +7,7 @@
 #include "battery.h"
 #include "build_info.h"
 #include "calls.h"
+#include "memo.h"
 #include "devices.h"
 #include "devlog.h"
 #include "esp_event.h"
@@ -68,6 +69,7 @@ void app_main(void) {
   portal_start();
   forward_start();
   tracker_start();
+  memo_start();
   calls_start();
   event_post("Started %s%s", FW_VERSION, cfg_bool("setup_done") ? "" : " (first-run setup pending)");
 

@@ -116,7 +116,7 @@ static bool is_final(const char *l, bool *ok) {
 static bool unsolicited(const char *l, const char *cmd) {
   char a[28];
   call_urc_t cu = call_urc_parse(l, a, sizeof(a));
-  if (cu == CU_RING || cu == CU_CLIP || cu == CU_DTMF || cu == CU_MISSED) return true;
+  if (cu == CU_RING || cu == CU_CLIP || cu == CU_DTMF || cu == CU_MISSED || cu == CU_REC_FULL) return true;
   if (!strncmp(l, "VOICE CALL:", 11) || !strncmp(l, "+CMTI:", 6) || call_urc_maybe_dtmf(l)) return true;
   // A call ending while some other command runs.
   if (!strcmp(l, "NO CARRIER") && strncmp(cmd, "ATD", 3) && strncmp(cmd, "ATA", 3) && strncmp(cmd, "ATH", 3) &&
@@ -528,6 +528,118 @@ void modem_uart_start(void) {
 }
 
 bool modem_alive(void) { return st.alive; }
+
+// Reads exactly n raw bytes that follow a "+CFTRANTX: DATA,n" line.
+static bool read_exact(uint8_t *buf, size_t n, int timeout_ms) {
+  size_t got = 0;
+  int64_t until = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+  while (got < n && esp_timer_get_time() < until) {
+    int r = uart_read_bytes(UART, buf + got, n - got, pdMS_TO_TICKS(100));
+    if (r > 0) got += (size_t)r;
+  }
+  return got == n;
+}
+
+// One AT+CFTRANTX exchange; data blocks are appended to out. Returns bytes
+// received, or -1 if the modem answered ERROR or stalled.
+static long tran_locked(const char *cmd, FILE *out, char *err, size_t errcap) {
+  char line[256];
+  while (read_line(line, sizeof(line), 0)) handle_urc(line);
+  devlog("AT> %s", cmd);
+  uart_write_bytes(UART, cmd, strlen(cmd));
+  uart_write_bytes(UART, "\r", 1);
+  uint8_t *buf = malloc(4096);
+  if (!buf) return -1;
+  long total = 0;
+  int64_t idle_until = esp_timer_get_time() + 15LL * 1000000;
+  for (;;) {
+    if (esp_timer_get_time() > idle_until) {
+      snprintf(err, errcap, "modem stopped sending the file");
+      total = -1;
+      break;
+    }
+    if (!read_line(line, sizeof(line), 100)) continue;
+    if (!strcmp(line, cmd)) continue;
+    if (!strncmp(line, "+CFTRANTX: DATA", 15)) {
+      const char *c = strchr(line, ',');
+      long n = c ? atol(c + 1) : 0;
+      while (n > 0) {
+        size_t k = n > 4096 ? 4096 : (size_t)n;
+        if (!read_exact(buf, k, 5000)) {
+          snprintf(err, errcap, "file data cut short");
+          total = -1;
+          break;
+        }
+        if (fwrite(buf, 1, k, out) != k) {
+          snprintf(err, errcap, "board storage full");
+          total = -1;
+          break;
+        }
+        total += (long)k;
+        n -= (long)k;
+      }
+      if (total < 0) break;
+      idle_until = esp_timer_get_time() + 15LL * 1000000;
+      continue;
+    }
+    if (!strncmp(line, "+CFTRANTX:", 10)) continue;  // "+CFTRANTX: 0" = end of data
+    if (unsolicited(line, cmd)) {
+      handle_urc(line);
+      continue;
+    }
+    bool ok = false;
+    if (is_final(line, &ok)) {
+      if (!ok) {
+        snprintf(err, errcap, "modem: %s", line);
+        total = -1;
+      }
+      break;
+    }
+  }
+  free(buf);
+  return total;
+}
+
+long modem_file_read(const char *path, FILE *out, char *err, size_t errcap) {
+  const long CH = 32768;
+  long done = 0;
+  char cmd[120];
+  for (;;) {
+    snprintf(cmd, sizeof(cmd), "AT+CFTRANTX=\"%s\",%ld,%ld", path, done, CH);
+    xSemaphoreTake(lock, portMAX_DELAY);
+    long n = tran_locked(cmd, out, err, errcap);
+    if (n < 0 && done == 0) {
+      // Firmware without the <location> argument: take the whole file at once.
+      devlog("modem: chunked file read refused (%s), reading the whole file", err);
+      err[0] = 0;
+      snprintf(cmd, sizeof(cmd), "AT+CFTRANTX=\"%s\"", path);
+      n = tran_locked(cmd, out, err, errcap);
+      xSemaphoreGive(lock);
+      return n;
+    }
+    xSemaphoreGive(lock);
+    if (n < 0) {
+      // Asking past the end of a file that is an exact multiple of the chunk.
+      if (done > 0) devlog("modem: file read stopped at %ld bytes (%s)", done, err);
+      return done > 0 ? done : -1;
+    }
+    done += n;
+    if (n < CH) return done;
+    vTaskDelay(pdMS_TO_TICKS(50));  // let SMS and call work in
+  }
+}
+
+void modem_file_delete(const char *path) {
+  // AT+FSDEL works on the current directory: change to it, delete by name.
+  char cmd[120], dir[8] = "C:/";
+  const char *slash = strrchr(path, '/');
+  if (slash && slash - path < 7) snprintf(dir, sizeof(dir), "%.*s", (int)(slash - path + 1), path);
+  bool ok;
+  snprintf(cmd, sizeof(cmd), "AT+FSCD=%s", dir);
+  free(modem_cmd(cmd, 3000, &ok));
+  snprintf(cmd, sizeof(cmd), "AT+FSDEL=%s", slash ? slash + 1 : path);
+  free(modem_cmd(cmd, 5000, &ok));
+}
 
 void modem_own_number(char *out, size_t cap) {
   xSemaphoreTake(lock, portMAX_DELAY);

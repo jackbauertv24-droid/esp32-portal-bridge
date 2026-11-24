@@ -13,6 +13,7 @@ typedef enum {
   CU_END,       // call ended
   CU_MISSED,
   CU_DTMF,      // key pressed by the caller; arg[0] = key
+  CU_REC_FULL,  // call recording stopped by the modem (file full)
 } call_urc_t;
 
 // Classifies one line from the modem. A76XX firmware is not documented for

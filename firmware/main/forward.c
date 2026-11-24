@@ -57,7 +57,12 @@ static int http_send(const char *method, const char *url, const char *ct, const 
   int status = -1;
   if (resp && rcap) resp[0] = 0;
   esp_err_t e = esp_http_client_open(c, (int)len);
-  if (e == ESP_OK && len) e = esp_http_client_write(c, body, (int)len) == (int)len ? ESP_OK : ESP_FAIL;
+  // Large bodies (voice memos) may go out in several writes.
+  for (size_t off = 0; e == ESP_OK && off < len;) {
+    int n = esp_http_client_write(c, body + off, (int)(len - off > 16384 ? 16384 : len - off));
+    if (n <= 0) e = ESP_FAIL;
+    else off += (size_t)n;
+  }
   if (e == ESP_OK) {
     esp_http_client_fetch_headers(c);
     status = esp_http_client_get_status_code(c);
@@ -444,21 +449,26 @@ bool telegram_find_chats(char *result, size_t cap) {
   return st == 200;
 }
 
-bool telegram_send_document(const char *filename, const char *data, size_t len, char *result, size_t cap) {
+bool telegram_send_file(const char *chat_override, const char *filename, const char *ctype, const char *caption,
+                        const char *data, size_t len, char *result, size_t cap) {
   char token[128], chat[40], url[200];
   cfg_get("tg_token", token, sizeof(token));
-  cfg_get("tg_chat", chat, sizeof(chat));
+  if (chat_override && chat_override[0]) snprintf(chat, sizeof(chat), "%s", chat_override);
+  else cfg_get("tg_chat", chat, sizeof(chat));
   if (!token[0] || !chat[0]) {
     snprintf(result, cap, "Set the Telegram bot token and chat id first.");
     return false;
   }
   snprintf(url, sizeof(url), "https://api.telegram.org/bot%s/sendDocument", token);
   const char *bd = "----portalbridge7f3a";
-  char head[400], tail[64];
-  int hl = snprintf(head, sizeof(head),
-                    "--%s\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n%s\r\n--%s\r\nContent-Disposition: "
-                    "form-data; name=\"document\"; filename=\"%s\"\r\nContent-Type: text/plain\r\n\r\n",
-                    bd, chat, bd, filename);
+  char head[900], tail[64];
+  int hl = snprintf(head, sizeof(head), "--%s\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n%s\r\n", bd, chat);
+  if (caption && caption[0])
+    hl += snprintf(head + hl, sizeof(head) - hl,
+                   "--%s\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n%.500s\r\n", bd, caption);
+  hl += snprintf(head + hl, sizeof(head) - hl,
+                 "--%s\r\nContent-Disposition: form-data; name=\"document\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n",
+                 bd, filename, ctype);
   int tl = snprintf(tail, sizeof(tail), "\r\n--%s--\r\n", bd);
   size_t total = (size_t)hl + len + (size_t)tl;
   char *body = malloc(total);
@@ -476,6 +486,24 @@ bool telegram_send_document(const char *filename, const char *data, size_t len, 
   free(body);
   snprintf(result, cap, st == 200 ? "Sent to Telegram." : "Telegram HTTP %d", st);
   return st == 200;
+}
+
+bool telegram_send_document(const char *filename, const char *data, size_t len, char *result, size_t cap) {
+  return telegram_send_file(NULL, filename, "text/plain", NULL, data, len, result, cap);
+}
+
+bool webhook_send_file(const char *url, const char *ctype, const char *caller, const char *data, size_t len,
+                       char *result, size_t cap) {
+  char hn[64], hv[256];
+  cfg_get("wh_hdr", hn, sizeof(hn));
+  cfg_get("wh_secret", hv, sizeof(hv));
+  const char *hdrs[] = {hn, hv, "X-Caller", caller ? caller : "", NULL};
+  const char *const *h = hdrs;
+  if (!hn[0] || !hv[0]) h = hdrs + 2;  // no auth header configured
+  char resp[200];
+  int st = http_send("POST", url, ctype, data, len, h, resp, sizeof(resp));
+  snprintf(result, cap, st >= 200 && st < 300 ? "Sent to the webhook." : "Webhook HTTP %d", st);
+  return st >= 200 && st < 300;
 }
 
 static int gh_post(const char *path, const char *json, char *resp, size_t rcap) {

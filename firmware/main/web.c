@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
 #include "calls.h"
+#include "memo.h"
 #include "debug.h"
 #include "devices.h"
 #include "meter.h"
@@ -594,6 +595,49 @@ static esp_err_t h_calls_post(httpd_req_t *req) {
   return e;
 }
 
+static esp_err_t h_memos(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, memo_json());
+}
+
+static esp_err_t h_memo_file(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char id[12], path[40], dl[4];
+  query(req, "id", id, sizeof(id));
+  query(req, "download", dl, sizeof(dl));
+  FILE *f = memo_file((uint32_t)strtoul(id, NULL, 10), path, sizeof(path)) ? fopen(path, "r") : NULL;
+  if (!f) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such memo");
+  httpd_resp_set_type(req, "audio/wav");
+  char disp[64];
+  snprintf(disp, sizeof(disp), "attachment; filename=\"voice-memo-%s.wav\"", id);
+  if (dl[0] == '1') httpd_resp_set_hdr(req, "Content-Disposition", disp);
+  char *buf = malloc(4096);
+  size_t n;
+  while (buf && (n = fread(buf, 1, 4096, f)) > 0)
+    if (httpd_resp_send_chunk(req, buf, (ssize_t)n) != ESP_OK) break;
+  free(buf);
+  fclose(f);
+  return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// POST {action: "delete"|"resend", id}
+static esp_err_t h_memos_post(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 256);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *act = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "action")) : NULL;
+  uint32_t id = o ? (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "id")) : 0;
+  esp_err_t e;
+  if (act && !strcmp(act, "delete")) e = send_result(req, memo_delete(id), "Deleted.");
+  else if (act && !strcmp(act, "resend")) {
+    bool ok = memo_resend(id);
+    e = send_result(req, ok, ok ? "Sending again." : "Not available.");
+  } else e = send_result(req, false, "unknown action");
+  cJSON_Delete(o);
+  return e;
+}
+
 static esp_err_t h_update(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -762,6 +806,9 @@ void web_start(void) {
       {"/api/track/day", HTTP_GET, h_track_day},
       {"/api/calls", HTTP_GET, h_calls},
       {"/api/calls", HTTP_POST, h_calls_post},
+      {"/api/memos", HTTP_GET, h_memos},
+      {"/api/memos", HTTP_POST, h_memos_post},
+      {"/api/memo", HTTP_GET, h_memo_file},
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},

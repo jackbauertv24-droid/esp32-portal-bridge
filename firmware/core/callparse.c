@@ -35,6 +35,7 @@ call_urc_t call_urc_parse(const char *l, char *arg, size_t cap) {
   if (starts(l, "VOICE CALL: END") || !strcmp(l, "NO CARRIER") || !strcmp(l, "BUSY") || !strcmp(l, "NO ANSWER"))
     return CU_END;
   if (starts(l, "MISSED_CALL:") || starts(l, "+MISSED_CALL")) return CU_MISSED;
+  if (starts(l, "+CREC:") && strstr(l, "full")) return CU_REC_FULL;
   if (has_dtmf_word(l)) {
     const char *v = strchr(l, ':');
     if (!v) return CU_NONE;

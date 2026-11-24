@@ -9,6 +9,7 @@
 #include "battery.h"
 #include "build_info.h"
 #include "calls.h"
+#include "memo.h"
 #include "devices.h"
 #include "devlog.h"
 #include "esp_app_desc.h"
@@ -143,6 +144,8 @@ char *report_build(void) {
   tracker_summary(sum, 2048);
   put(&s, sum);
   calls_summary(sum, 2048);
+  put(&s, sum);
+  memo_summary(sum, 2048);
   put(&s, sum);
   free(sum);
 
