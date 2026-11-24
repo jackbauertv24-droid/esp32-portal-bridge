@@ -97,6 +97,19 @@ static void put(sb_t *s, const char *t) {
   s->len += n;
 }
 
+// Reports may go to a public GitHub issue: mask numbers, MAC addresses and
+// every Wi-Fi name the board knows (upstream networks and its own hotspot).
+static void redact_private(char *b) {
+  redact_long_numbers(b);
+  redact_macs(b);
+  static const char *const keys[] = {"w1_ssid", "w2_ssid", "w3_ssid", "ap_ssid"};
+  char name[40];
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+    cfg_get(keys[i], name, sizeof(name));
+    redact_word(b, name);
+  }
+}
+
 char *report_build(void) {
   sb_t s = {0};
   char line[1024];
@@ -113,6 +126,12 @@ char *report_build(void) {
   const esp_partition_t *run = esp_ota_get_running_partition();
   snprintf(line, sizeof(line), "chip: esp32s3 rev %d, %d cores; running from %s; reset: %s; uptime %lld s\n",
            ci.revision, ci.cores, run ? run->label : "?", reset_reason(), esp_timer_get_time() / 1000000);
+  put(&s, line);
+  snprintf(line, sizeof(line), "internal RAM: free %u KB, largest block %u KB, lowest since start %u KB; PSRAM free %u KB\n",
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024),
+           (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
   put(&s, line);
   esp_core_dump_summary_t *cd = malloc(sizeof(esp_core_dump_summary_t));
   if (cd && esp_core_dump_get_summary(cd) == ESP_OK) {
@@ -179,7 +198,7 @@ char *report_build(void) {
   char *log = devlog_dump(&ll);
   if (log) put(&s, log);
   free(log);
-  if (s.b) redact_long_numbers(s.b);
+  if (s.b) redact_private(s.b);
   return s.b;
 }
 
@@ -201,6 +220,6 @@ char *report_latest_recording(char *name, size_t cap) {
   size_t got = fread(b, 1, (size_t)n, f);
   b[got] = 0;
   fclose(f);
-  redact_long_numbers(b);
+  redact_private(b);
   return b;
 }

@@ -351,6 +351,9 @@ void netmgr_start(void) {
   ac.ap.pmf_cfg.required = false;
   esp_wifi_set_config(WIFI_IF_AP, &ac);
   ESP_ERROR_CHECK(esp_wifi_start());
+  // A router must not doze: the default modem sleep on the upstream link
+  // makes forwarded traffic slow and bursty.
+  esp_wifi_set_ps(WIFI_PS_NONE);
 
   char ip[16];
   cfg_get("ap_ip", ip, sizeof(ip));

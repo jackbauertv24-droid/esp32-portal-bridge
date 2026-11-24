@@ -28,6 +28,7 @@ jobs:
           gcc $FLAGS tests/test_netparse.c firmware/core/netparse.c -o t_netparse && ./t_netparse
           gcc $FLAGS tests/test_gnss.c firmware/core/gnssparse.c -lm -o t_gnss && ./t_gnss
           gcc $FLAGS tests/test_call.c firmware/core/callparse.c -o t_call && ./t_call
+          gcc $FLAGS tests/test_redact.c firmware/core/redact.c -o t_redact && ./t_redact
           npm install --no-save --silent node-pdu@2.1.2
           ./t_submit | node tests/verify_submit.mjs
 
