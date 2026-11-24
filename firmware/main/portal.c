@@ -502,7 +502,7 @@ static void portal_task(void *arg) {
   }
 }
 
-void portal_start(void) { xTaskCreatePinnedToCore(portal_task, "portal", 20480, NULL, 3, NULL, 1); }
+void portal_start(void) { xTaskCreatePinnedToCore(portal_task, "portal", 10240, NULL, 3, NULL, 1); }
 void portal_trigger(void) { trigger = true; }
 
 void portal_status_json(cJSON *root) {

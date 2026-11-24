@@ -204,7 +204,7 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
   <div class="card">
     <h2>Camera</h2>
     <p class="mut">Needs the Camera DIP switch ON and the camera ribbon cable seated and locked. <b>Diagnose camera</b> checks power, the control bus, the sensor and the picture signals step by step and says whether it looks like hardware or firmware.</p>
-    <div class="row"><select id="cam_size" style="width:auto"><option value="vga">640×480</option><option value="svga" selected>800×600</option><option value="uxga">1600×1200</option></select>
+    <div class="row"><select id="cam_size" style="width:auto"><option value="vga">640×480</option><option value="svga" selected>800×600</option></select>
     <button onclick="camShot()">Take photo</button><button class="sec" onclick="camDiag()">Diagnose camera</button></div>
     <div id="cam_diag"></div>
     <div class="msg" id="cam_msg"></div><img id="cam_img" style="max-width:100%;margin-top:10px;border-radius:8px" class="hidden" alt="camera test photo">

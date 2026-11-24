@@ -99,9 +99,9 @@ static void cam_config(camera_config_t *c, const cam_try_t *t, framesize_t want)
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
       .pixel_format = t->pf,
-      .frame_size = t->fs == FRAMESIZE_INVALID ? want : t->fs,
+      .frame_size = t->fs != FRAMESIZE_INVALID ? t->fs : (t->pf == PIXFORMAT_JPEG || want <= FRAMESIZE_SVGA) ? want : FRAMESIZE_SVGA,
       .jpeg_quality = t->quality ? t->quality : 12,
-      .fb_count = t->psram ? 2 : 1,
+      .fb_count = t->psram && t->pf == PIXFORMAT_JPEG ? 2 : 1,  // raw frames are large (800x600 = 960 KB)
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
   };
@@ -169,11 +169,13 @@ static bool cam_grab(uint8_t **jpg, size_t *len, int *w, int *h) {
 // only if there is room for it. Each attempt is described in `log` (may be NULL).
 static bool cam_capture(framesize_t want, uint8_t **jpg, size_t *len, int *w, int *h, char *how, size_t hcap,
                         char *sensor, size_t scap, cJSON *log) {
+  // Raw RGB565 converted to JPEG on the board works on this board's OV5640
+  // (report #4); the sensor's own JPEG times out with frames to PSRAM.
   static const cam_try_t T[] = {
-      {true, PIXFORMAT_JPEG, FRAMESIZE_INVALID, 12, 20000000, "JPEG, frames to PSRAM"},
-      {true, PIXFORMAT_JPEG, FRAMESIZE_INVALID, 25, 20000000, "JPEG lower quality, frames to PSRAM"},
-      {true, PIXFORMAT_JPEG, FRAMESIZE_VGA, 35, 10000000, "JPEG 640x480 low quality, 10 MHz, frames to PSRAM"},
-      {true, PIXFORMAT_RGB565, FRAMESIZE_QVGA, 0, 10000000, "RGB565 320x240, frames to PSRAM"},
+      {true, PIXFORMAT_RGB565, FRAMESIZE_INVALID, 0, 20000000, "raw, size asked for, frames to PSRAM"},
+      {true, PIXFORMAT_RGB565, FRAMESIZE_VGA, 0, 10000000, "raw 640x480, 10 MHz, frames to PSRAM"},
+      {true, PIXFORMAT_RGB565, FRAMESIZE_QVGA, 0, 10000000, "raw 320x240, frames to PSRAM"},
+      {true, PIXFORMAT_JPEG, FRAMESIZE_VGA, 25, 20000000, "JPEG 640x480, frames to PSRAM"},
       {false, PIXFORMAT_JPEG, FRAMESIZE_VGA, 12, 20000000, "JPEG 640x480, internal DMA buffer"},
   };
   for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {

@@ -349,7 +349,7 @@ static void fwd_task(void *arg) {
   }
 }
 
-void forward_start(void) { xTaskCreatePinnedToCore(fwd_task, "forward", 12288, NULL, 3, &task, 1); }
+void forward_start(void) { xTaskCreatePinnedToCore(fwd_task, "forward", 10240, NULL, 3, &task, 1); }
 
 void forward_kick(void) {
   if (task) xTaskNotifyGive(task);

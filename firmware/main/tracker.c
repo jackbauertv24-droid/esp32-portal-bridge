@@ -313,7 +313,7 @@ static void task(void *arg) {
 
 void tracker_start(void) {
   mtx = xSemaphoreCreateMutex();
-  xTaskCreatePinnedToCore(task, "tracker", 6144, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(task, "tracker", 5120, NULL, 2, NULL, 1);
 }
 
 void tracker_log_now(void) { log_now = true; }

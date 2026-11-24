@@ -758,7 +758,7 @@ static esp_err_t h_any(httpd_req_t *req) {
 
 void web_start(void) {
   httpd_config_t c = HTTPD_DEFAULT_CONFIG();
-  c.stack_size = 24576;
+  c.stack_size = 20480;
   c.max_uri_handlers = 80;
   c.max_open_sockets = 7;
   c.lru_purge_enable = true;

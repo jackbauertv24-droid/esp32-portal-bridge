@@ -37,27 +37,28 @@ static void store(const char *s, size_t n) {
   }
 }
 
-// ESP-IDF log hook: print as usual, and keep a copy without colour codes.
+// ESP-IDF log hook: formats each line once into a shared buffer (not on the
+// calling task's stack: library tasks such as the USB modem daemon have only
+// 3 KB), prints it to the console and keeps a copy without colour codes.
+static char hook_line[384];
 static int log_hook(const char *fmt, va_list ap) {
-  char line[384];
-  va_list copy;
-  va_copy(copy, ap);
-  int n = vsnprintf(line, sizeof(line), fmt, copy);
-  va_end(copy);
+  if (!ring || !mtx || xPortInIsrContext() || xSemaphoreTake(mtx, pdMS_TO_TICKS(20)) != pdTRUE)
+    return orig_vprintf ? orig_vprintf(fmt, ap) : vprintf(fmt, ap);
+  int n = vsnprintf(hook_line, sizeof(hook_line), fmt, ap);
   if (n > 0) {
-    size_t len = (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1;
-    // Strip ANSI colour sequences.
-    size_t o = 0;
+    size_t len = (size_t)n < sizeof(hook_line) ? (size_t)n : sizeof(hook_line) - 1;
+    fwrite(hook_line, 1, len, stdout);
+    // Keep a copy without ANSI colour sequences.
     for (size_t i = 0; i < len; i++) {
-      if (line[i] == 0x1b) {
-        while (i < len && line[i] != 'm') i++;
+      if (hook_line[i] == 0x1b) {
+        while (i < len && hook_line[i] != 'm') i++;
         continue;
       }
-      line[o++] = line[i];
+      ring_put(&hook_line[i], 1);
     }
-    store(line, o);
   }
-  return orig_vprintf ? orig_vprintf(fmt, ap) : vprintf(fmt, ap);
+  xSemaphoreGive(mtx);
+  return n;
 }
 
 void devlog_init(void) {
