@@ -55,6 +55,7 @@ jobs:
             git config --global --add safe.directory "*"
             idf.py set-target esp32s3
             idf.py build
+            if xtensa-esp32s3-elf-nm build/esp-idf/lwip/liblwip.a 2>/dev/null | grep -q " U pb_route_hook"; then echo "lwIP route hook: installed"; else echo "ERROR: lwIP does not call pb_route_hook (load balancer would be inert)"; exit 1; fi
             cd build
             esptool.py --chip esp32s3 merge_bin -o merged.bin @flash_args
             ls -la *.bin
