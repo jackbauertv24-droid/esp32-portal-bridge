@@ -159,6 +159,12 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
     <div class="msg" id="rep_msg"></div>
   </div>
   <div class="card">
+    <h2>Internet check</h2>
+    <p class="mut">Tests each part of the path live: upstream Wi-Fi, hotspot and forwarding, the venue's login page, name lookup, 4G, and finally this device through the hotspot. The result says where it breaks; you can copy it from here.</p>
+    <button onclick="netDiag()">Check internet now</button>
+    <div id="nd_out"></div>
+  </div>
+  <div class="card">
     <h2>Firmware update</h2>
     <p class="mut">Choose the <b>-ota.bin</b> file from the GitHub release. If the new firmware fails to start, the board goes back to this one.</p>
     <input type="file" id="fwfile" accept=".bin">
@@ -356,7 +362,7 @@ async function api(path,opt){const r=await fetch(path,opt);if(r.status==403){sho
 async function jpost(path,body){const r=await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:body==null?'':(typeof body=='string'?body:JSON.stringify(body))});return r.json()}
 function msg(id,t,cls){const e=$(id);e.textContent=t||'';e.className='msg '+(cls||'')}
 
-let st=null,schema=null,values=null,page='status';
+let st=null,schema=null,values=null,page='status',paused=false;
 function go(p){location.hash=p}
 function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
 function route(){
@@ -377,6 +383,7 @@ function route(){
 window.addEventListener('hashchange',route);
 
 async function tick(){
+  if(paused)return;
   try{
     const r=await fetch('/api/status');st=await r.json();
     if(!st.board.setup_done){showSetup();if(!$('su_ssid').value)$('su_ssid').value=st.net.ap_ssid;return}
@@ -416,6 +423,7 @@ async function doSetup(){
   if(a.length<8||p.length<8)return msg('su_msg','Passwords need at least 8 characters.','bad');
   const r=await (await fetch('/api/setup',{method:'POST',body:JSON.stringify({adm_pass:a,ap_ssid:s,ap_pass:p})})).json();
   msg('su_msg',r.message,r.ok?'ok':'bad');
+  if(r.ok){paused=true;msg('su_msg',r.message+'\n\nThen open this page again and log in as admin with your NEW admin password (the browser asks for it: that is expected).','ok')}
 }
 
 let inbox=[],outbox=[],seen=0,thread=null,selecting=false,selected=new Set();
@@ -490,7 +498,7 @@ async function loadSettings(){
       if(s.type=='bool')h+='<div class="chk"><input type="checkbox" id="'+id+'"'+(v=='1'?' checked':'')+'><span><b>'+esc(s.label)+'</b></span></div>';
       else{h+='<label for="'+id+'">'+esc(s.label)+(s.reboot?' <span class="tag">restart</span>':'')+'</label>';
         if(s.type=='enum')h+='<select id="'+id+'">'+s.options.split('|').map(o=>'<option'+(o==v?' selected':'')+'>'+esc(o)+'</option>').join('')+'</select>';
-        else h+='<input id="'+id+'" '+(s.type=='secret'?'type="password" autocomplete="new-password" ':'')+(s.type=='int'?'inputmode="numeric" ':'')+'value="'+esc(v)+'" placeholder="'+esc(s.def)+'">';}
+        else h+='<input id="'+id+'" '+(s.type=='secret'?'type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore ':'')+(s.type=='int'?'inputmode="numeric" ':'')+'value="'+esc(v)+'" placeholder="'+esc(s.def)+'">';}
       if(s.help)h+='<div class="help">'+esc(s.help)+'</div>';
     });
     if(g=='Forwarding')h+='<h3>Check a channel (save first)</h3><button class="sec" onclick="ftest(\'tg\')">Test Telegram</button><button class="sec" onclick="ftest(\'wh\')">Test webhook</button><button class="sec" onclick="ftest(\'mq\')">Test MQTT</button><button class="sec" onclick="chats()">Find my Telegram chat id</button><div class="msg" id="fw_test"></div>';
@@ -499,8 +507,13 @@ async function loadSettings(){
   $('settings_form').innerHTML=h;
 }
 async function saveSettings(){
-  const out={};schema.forEach(s=>{const e=$('s_'+s.key);if(!e)return;out[s.key]=s.type=='bool'?(e.checked?'1':'0'):e.value.trim()});
-  const r=await jpost('/api/settings',out);msg('set_msg',r.message,r.ok?'ok':'bad');
+  const out={},changed=[];schema.forEach(s=>{const e=$('s_'+s.key);if(!e)return;const v=s.type=='bool'?(e.checked?'1':'0'):e.value.trim();
+    if(v!==(values[s.key]??''))out[s.key]=v,changed.push(s)});
+  if(!changed.length)return msg('set_msg','Nothing changed.');
+  const risky=changed.filter(s=>['adm_pass','ap_pass','ap_ssid','ap_ip'].includes(s.key));
+  if(risky.length&&!confirm('You are changing: '+risky.map(s=>s.label).join(', ')+'.\n\nIf you did not mean to (a browser may fill in saved passwords by itself), press Cancel.'+(out.adm_pass?'\n\nAfter saving, the browser asks you to log in again: user admin, the NEW admin password.':'')))return;
+  const r=await jpost('/api/settings',out);msg('set_msg',r.message+(r.ok?' Changed: '+changed.map(s=>s.label).join(', ')+'.':''),r.ok?'ok':'bad');
+  if(r.ok){changed.forEach(s=>values[s.key]=s.type=='secret'&&out[s.key]?'********':out[s.key])}
   if(r.reboot)$('btn_restart').classList.remove('hidden');
 }
 async function scan(){$('scan').textContent='Scanning…';const a=await (await api('/api/wifi/scan')).json();
@@ -815,6 +828,18 @@ async function loadMemos(){
       +'<button class="danger" onclick="memoAct(\'delete\','+x.id+')">Delete</button></div></div>').join(""):'<span class="mut">No voice memos. Turn them on under Settings › Calls.</span>'}catch(e){}}
 async function memoAct(a,id){if(a=="delete"&&!confirm("Delete this voice memo?"))return;const r=await jpost("/api/memos",{action:a,id});msg("calls_msg",r.message,r.ok?"ok":"bad");memoSig="";loadMemos()}
 async function callAct(a){const r=await jpost("/api/calls",{action:a});msg("calls_msg",r.message,r.ok?"ok":"bad");loadCalls()}
+
+async function netDiag(){
+  const box=$("nd_out");box.innerHTML='<p class="mut">Checking… (up to 30 seconds)</p>';
+  let phone="";
+  try{const t=performance.now(),ac=new AbortController(),to=setTimeout(()=>ac.abort(),8000);
+    await fetch("https://www.gstatic.com/generate_204?"+Date.now(),{mode:"no-cors",cache:"no-store",signal:ac.signal});clearTimeout(to);
+    phone='<b class="ok">PASS</b> this phone/computer reached the internet through the hotspot in '+Math.round(performance.now()-t)+' ms'}
+  catch(e){phone='<b class="bad">FAIL</b> this phone/computer could not reach the internet through the hotspot. If the board checks pass, forget the hotspot on this device and join again (it may hold an old address), and turn off any VPN or private DNS on it.'}
+  try{const r=await dget("/api/netdiag");
+    box.innerHTML='<table>'+r.steps.map(s=>row(esc(s.step),'<b class="'+(s.result=="pass"?"ok":s.result=="fail"?"bad":"mut")+'">'+s.result.toUpperCase()+'</b> '+esc(s.detail))).join("")
+      +row("This device through the hotspot",phone)+'</table><div class="msg '+(r.kind=="none"?"ok":"bad")+'"><b>'+(r.kind=="none"?"Board side OK":"Likely cause: "+esc(r.kind))+'</b><br>'+esc(r.verdict)+'</div>'}
+  catch(e){box.innerHTML='<div class="msg bad">Check failed: '+esc(String(e))+'</div>'}}
 
 tick().then(route);setInterval(()=>{if(page=='devices')loadDevices();if(page=='status')loadCalls()},3000);setInterval(()=>{if(page=='tracker')loadTracker()},15000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
 </script>

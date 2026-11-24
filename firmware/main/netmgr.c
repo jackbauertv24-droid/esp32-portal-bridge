@@ -24,6 +24,9 @@
 #include "nvs.h"
 #include "settings.h"
 #include "urlutil.h"
+#include "lwip/inet.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
 
 static esp_netif_t *ap_if, *sta_if;
 static volatile bool sta_connected, sta_has_ip;
@@ -38,6 +41,7 @@ static bool sntp_started;
 static int64_t last_wifi_probe_us, last_lte_probe_us;
 static unsigned sta_fail_streak;
 static int napt_on = 1;  // hotspot clients may reach the internet
+static int last_fail_reason;  // last Wi-Fi disconnect reason code
 
 // ---------- hotspot ----------
 
@@ -111,6 +115,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
     wifi_event_sta_disconnected_t *d = data;
     if (sta_connected) event_post("Upstream Wi-Fi \"%s\" disconnected (reason %d)", sta_ssid, d->reason);
     else devlog("wifi: connect to slot %d failed (reason %d)", sta_slot + 1, d->reason);
+    last_fail_reason = d->reason;
     sta_connected = sta_has_ip = false;
     sta_ip[0] = 0;
     wifi_state = NET_UNKNOWN;
@@ -409,6 +414,130 @@ void netmgr_status_json(cJSON *root) {
   cJSON_AddStringToObject(o, "ap_ssid", ssid);
   time_t t = time(NULL);
   cJSON_AddNumberToObject(o, "time", (double)t);
+}
+
+// ---------- network check (Tools page) ----------
+
+static void dstep(cJSON *arr, const char *name, int ok, const char *detail) {
+  cJSON *o = cJSON_CreateObject();
+  cJSON_AddStringToObject(o, "step", name);
+  cJSON_AddStringToObject(o, "result", ok > 0 ? "pass" : ok == 0 ? "fail" : "info");
+  cJSON_AddStringToObject(o, "detail", detail);
+  cJSON_AddItemToArray(arr, o);
+  devlog("net check: %s: %s - %s", name, ok > 0 ? "pass" : ok == 0 ? "FAIL" : "info", detail);
+}
+
+static const char *reason_text(int r) {
+  switch (r) {
+    case 0: return "none";
+    case WIFI_REASON_NO_AP_FOUND: return "network not found (out of range, 5 GHz only, or name wrong)";
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: return "password rejected or handshake timed out";
+    case WIFI_REASON_ASSOC_FAIL: return "association refused";
+    case WIFI_REASON_BEACON_TIMEOUT: return "signal lost";
+    default: return "other";
+  }
+}
+
+static void ip_of(esp_netif_t *n, char *out, size_t cap) {
+  esp_netif_ip_info_t i;
+  if (n && esp_netif_get_ip_info(n, &i) == ESP_OK)
+    snprintf(out, cap, IPSTR " / " IPSTR ", gateway " IPSTR, IP2STR(&i.ip), IP2STR(&i.netmask), IP2STR(&i.gw));
+  else snprintf(out, cap, "-");
+}
+
+static void dns_of(esp_netif_t *n, char *out, size_t cap) {
+  esp_netif_dns_info_t d;
+  if (n && esp_netif_get_dns_info(n, ESP_NETIF_DNS_MAIN, &d) == ESP_OK && d.ip.u_addr.ip4.addr)
+    snprintf(out, cap, IPSTR, IP2STR(&d.ip.u_addr.ip4));
+  else snprintf(out, cap, "none");
+}
+
+cJSON *netmgr_diag_json(void) {
+  cJSON *o = cJSON_CreateObject(), *st = cJSON_AddArrayToObject(o, "steps");
+  char d[300], a[100], b[24];
+  const char *verdict = "", *kind = "";
+  int configured = 0;
+  for (int i = 0; i < 3; i++) {
+    char s[33], p[64];
+    if (slot_ssid(i, s, sizeof(s), p, sizeof(p))) configured++;
+  }
+  wifi_ap_record_t ai;
+  bool assoc = esp_wifi_sta_get_ap_info(&ai) == ESP_OK;
+  if (sta_has_ip) {
+    ip_of(sta_if, a, sizeof(a));
+    dns_of(sta_if, b, sizeof(b));
+    snprintf(d, sizeof(d), "\"%s\", %d dBm, channel %d, address %s, DNS %s", sta_ssid, assoc ? ai.rssi : 0,
+             assoc ? ai.primary : 0, a, b);
+  } else {
+    snprintf(d, sizeof(d), "not connected; %d network(s) set; last failure: %s (code %d)", configured,
+             reason_text(last_fail_reason), last_fail_reason);
+  }
+  dstep(st, "Upstream Wi-Fi", sta_has_ip, d);
+
+  ip_of(ap_if, a, sizeof(a));
+  dns_of(ap_if, b, sizeof(b));
+  wifi_sta_list_t list;
+  int clients = esp_wifi_ap_get_sta_list(&list) == ESP_OK ? list.num : 0;
+  snprintf(d, sizeof(d), "%s, %d device(s), DNS given to devices %s, NAT %s", a, clients, b, napt_on ? "on" : "OFF");
+  dstep(st, "Hotspot", napt_on ? 1 : 0, d);
+
+  char mode[20];
+  cfg_get("up_mode", mode, sizeof(mode));
+  snprintf(d, sizeof(d), "using %s (mode %s)%s%s", uplink, mode, meter_lte_blocked() ? "; 4G data limit reached" : "",
+           cfg_is("lb_mode", "balance") ? "; Wi-Fi + 4G together is on" : "");
+  dstep(st, "Uplink chosen", strcmp(uplink, "none") && strcmp(uplink, "4g-board") ? 1 : 0, d);
+
+  net_state_t w = NET_UNKNOWN;
+  if (sta_has_ip) {
+    int64_t t = esp_timer_get_time();
+    w = probe(sta_if, false);
+    snprintf(d, sizeof(d), "%s in %lld ms%s%s", state_name(w), (esp_timer_get_time() - t) / 1000,
+             w == NET_CAPTIVE && portal_url[0] ? "; login page " : "", w == NET_CAPTIVE ? portal_url : "");
+    dstep(st, "Internet through the Wi-Fi, checked now", w == NET_ONLINE, d);
+  }
+  url_parts_t u;
+  char url[220];
+  cfg_get("probe_url", url, sizeof(url));
+  bool dns_ok = false;
+  if (url_split(url, &u) == 0) {
+    char *colon = strchr(u.host, ':');
+    if (colon) *colon = 0;
+    struct addrinfo hints = {.ai_family = AF_INET}, *res = NULL;
+    int64_t t = esp_timer_get_time();
+    int r = getaddrinfo(u.host, NULL, &hints, &res);
+    dns_ok = r == 0 && res;
+    if (dns_ok) {
+      struct sockaddr_in *sa = (struct sockaddr_in *)res->ai_addr;
+      snprintf(d, sizeof(d), "%s -> %s in %lld ms", u.host, inet_ntoa(sa->sin_addr), (esp_timer_get_time() - t) / 1000);
+    } else {
+      snprintf(d, sizeof(d), "%s: no answer (error %d) after %lld ms", u.host, r, (esp_timer_get_time() - t) / 1000);
+    }
+    if (res) freeaddrinfo(res);
+    dstep(st, "Name lookup (DNS) on the board", dns_ok, d);
+  }
+  net_state_t l = NET_UNKNOWN;
+  if (lte_up() && lte_netif()) {
+    int64_t t = esp_timer_get_time();
+    l = probe(lte_netif(), false);
+    snprintf(d, sizeof(d), "%s in %lld ms", state_name(l), (esp_timer_get_time() - t) / 1000);
+    dstep(st, "Internet through 4G, checked now", l == NET_ONLINE, d);
+  } else {
+    dstep(st, "4G", -1, cfg_bool("lte_en") ? "not connected" : "off in settings");
+  }
+
+  if (!configured) verdict = "No upstream Wi-Fi is set. Add one under Settings > Upstream Wi-Fi (or Wi-Fi survey > Use as upstream).", kind = "settings";
+  else if (!sta_has_ip) verdict = "The board has not joined the upstream Wi-Fi. See the last failure above: check the name and password, that it is 2.4 GHz, and the distance.", kind = "upstream Wi-Fi";
+  else if (w == NET_CAPTIVE) verdict = "The venue Wi-Fi shows its login page again (sessions expire). Use Login page > Try automatic login now, or log in through the board there.", kind = "venue login";
+  else if (w != NET_ONLINE && !dns_ok) verdict = "The venue Wi-Fi gives no internet and its DNS does not answer. The venue network itself may be down or blocking.", kind = "venue network";
+  else if (w != NET_ONLINE) verdict = "Joined the venue Wi-Fi but the internet check fails. The venue network may be down, or the check URL blocked.", kind = "venue network";
+  else if (strcmp(uplink, "wifi")) verdict = "The Wi-Fi works, but the hotspot is using another uplink. Check Settings > Internet uplink > Uplink mode.", kind = "settings";
+  else if (!napt_on) verdict = "The Wi-Fi works but forwarding for hotspot devices is off. This is a firmware fault; send a report.", kind = "firmware";
+  else verdict = "The board itself reaches the internet through the Wi-Fi and forwards for hotspot devices. If your phone still has no internet, see the phone check below.", kind = "none";
+  cJSON_AddStringToObject(o, "verdict", verdict);
+  cJSON_AddStringToObject(o, "kind", kind);
+  return o;
 }
 
 void netmgr_summary(char *out, size_t cap) {

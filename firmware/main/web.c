@@ -737,6 +737,11 @@ static esp_err_t h_reboot(httpd_req_t *req) {
   return ESP_OK;
 }
 
+static esp_err_t h_netdiag(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, netmgr_diag_json());
+}
+
 static esp_err_t h_wifi_reconnect(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   netmgr_reconnect();
@@ -810,6 +815,7 @@ void web_start(void) {
       {"/api/memos", HTTP_POST, h_memos_post},
       {"/api/memo", HTTP_GET, h_memo_file},
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
+      {"/api/netdiag", HTTP_GET, h_netdiag},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},
       {"/api/data/allow", HTTP_POST, h_data_allow},

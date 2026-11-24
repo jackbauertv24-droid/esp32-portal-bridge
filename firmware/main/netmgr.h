@@ -26,6 +26,8 @@ void netmgr_recheck(void);
 void netmgr_reconnect(void);
 void netmgr_status_json(cJSON *root);
 void netmgr_summary(char *out, size_t cap);
+// Runs live checks of each part of the internet path (takes a few seconds).
+cJSON *netmgr_diag_json(void);
 // Current hotspot gateway address, e.g. "10.88.88.1".
 void netmgr_ap_ip(char *out, size_t cap);
 // The hotspot interface (NULL before netmgr_start).
