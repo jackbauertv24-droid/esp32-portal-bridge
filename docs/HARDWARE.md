@@ -43,3 +43,13 @@ GPIO19/20 (via R56/R57), 6/7 `HSD2` = USB hub (CH334) → Type-C.
 - **ON** → `SEL` high → `HSD2`: modem USB ↔ **Type-C** (a PC uses the board as a modem)
 
 Confidence: high from the schematic and the FSUSB42 truth table; not yet confirmed on a board.
+
+## Camera, TF card, audio (used by the Debug page)
+
+| Signal | Value | Source |
+|---|---|---|
+| Camera | XCLK 39, SCCB SDA 15 / SCL 16 (shared with the battery gauge), D0-D7 = GPIO 7-14, VSYNC 42, HREF 41, PCLK 46, no PWDN/RESET | Waveshare demo `CAMERA_MODEL_WAVESHARE_7670_BOARD` |
+| TF card | SDMMC 1-bit: CLK 5, CMD 4, D0 6 | Waveshare SD demo |
+| Speaker / microphone | wired to the A7670E (MIC_P/N, REC_SPK_P/N), not the ESP32; driven with AT+CTTS, AT+CREC, AT+CCMXPLAY, AT+CLVL | V1 schematic nets; SIMCom A7600 audio application note |
+
+GPIO42 is a camera data line, which also rules out the community claim that it is the modem PWRKEY.

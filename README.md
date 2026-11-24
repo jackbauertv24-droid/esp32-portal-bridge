@@ -18,13 +18,16 @@ Builds run on GitHub Actions (ESP-IDF 5.5); nothing is installed on a PC.
 |---|---|
 | Hotspot | WPA2 hotspot, up to 10 devices, admin app at its gateway address |
 | Uplinks | 4G (PPP over the modem's USB link) and up to three upstream Wi-Fi networks; modes `wifi_then_4g` (default), `4g_then_wifi`, `wifi`, `4g`; NAT to the hotspot |
+| Wi-Fi + 4G together | Optional load balancing when both uplinks are online: each device+site pair is pinned to one link, the Wi-Fi share is adjustable (10-90 %); helps with several sites or devices, not one single download; uses 4G data |
 | Internet checks | Every 30 s (configurable) per uplink; a redirect or HTML reply means a login page |
 | Automatic login | Replays a saved **recipe**, or finds the phone and code fields by itself; waits for the code SMS; checks internet afterwards; retries on a back-off |
 | Assisted login | Login page opened **through the board**; type `<phone>` or `<code>` and the board fills in the SIM's number or the SMS code; everything recorded; one tap turns a recording into a recipe |
 | SMS | Read from the SIM every 15 s and on arrival, multipart messages joined, saved to flash **before** removal from the SIM |
+| SMS manager | Conversations by number, search, filters (unread, login codes, sent, failed), compose and reply (any language, long messages split automatically), forward, copy code, multi-delete, export, unread badge |
 | Forwarding | Telegram bot, HTTPS webhook (JSON) and MQTT over TLS, each with its own delivery pointer and retry, so nothing is skipped across outages or restarts; device events (login results, uplink changes) too |
 | Diagnostics | Device log, modem console, crash summary, recordings; **one-tap report to a GitHub issue** (or Telegram / download) with numbers masked and no SMS text |
 | Maintenance | Firmware update from the admin page with automatic rollback, settings backup/restore |
+| Debug page | Hardware tests: camera photo, TF card read/write, PSRAM, chip temperature, LED, BOOT button, speaker (modem text-to-speech), microphone record + playback, test voice call, GNSS fix, modem/SIM/4G/battery checks; results land in the device log for the report |
 
 ## Board switches (back side)
 
