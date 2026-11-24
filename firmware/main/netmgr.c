@@ -23,6 +23,8 @@
 #include "lte.h"
 #include "mdns.h"
 #include "nvs.h"
+#include "sys/time.h"
+#include "textutil.h"
 #include "psram_task.h"
 #include "settings.h"
 #include "urlutil.h"
@@ -185,6 +187,16 @@ static net_state_t probe(esp_netif_t *nif, bool remember_portal) {
   cfg_get("probe_url", url, sizeof(url));
   httpc_resp_t r = {0};
   httpc_request(s, "GET", url, NULL, NULL, 0, NULL, 0, &r);
+  // Venue networks often block NTP; the check's HTTP Date header sets the
+  // clock instead (to the second, which is all the board needs).
+  if (time(NULL) < 1600000000 && r.date[0]) {
+    long long t = http_date_parse(r.date);
+    if (t > 1600000000) {
+      struct timeval tv = {.tv_sec = (time_t)t};
+      settimeofday(&tv, NULL);
+      devlog("clock: set from the internet check's HTTP Date header");
+    }
+  }
   net_state_t st;
   if (r.status == 204 || (r.status == 200 && r.body_len == 0)) {
     st = NET_ONLINE;

@@ -11,6 +11,7 @@
 #include "devices.h"
 #include "devlog.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
@@ -32,7 +33,25 @@
 #include "tracker.h"
 #include "web.h"
 
+// Failed memory requests: recorded without allocating (this runs inside the
+// failing allocation), shown in reports.
+static volatile uint32_t fail_count, fail_size, fail_caps;
+static const char *volatile fail_task;
+static void on_alloc_failed(size_t size, uint32_t caps, const char *fn) {
+  fail_count++;
+  fail_size = size;
+  fail_caps = caps;
+  fail_task = pcTaskGetName(NULL);
+}
+void alloc_failures(char *out, size_t cap) {
+  snprintf(out, cap, "failed memory requests: %lu%s", (unsigned long)fail_count, fail_count ? ", last: " : "");
+  if (fail_count)
+    snprintf(out + strlen(out), cap - strlen(out), "%lu bytes, caps 0x%lx, task %s", (unsigned long)fail_size,
+             (unsigned long)fail_caps, fail_task ? fail_task : "?");
+}
+
 void app_main(void) {
+  heap_caps_register_failed_alloc_callback(on_alloc_failed);
   devlog_init();
   devlog("=== portal-bridge %s commit %s built %s ===", FW_VERSION, FW_COMMIT, FW_BUILT);
 

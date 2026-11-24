@@ -196,3 +196,26 @@ int phone_in_list(const char *num, const char *list) {
   }
   return 0;
 }
+
+// "Tue, 24 Nov 2026 15:42:54 GMT" (RFC 7231 IMF-fixdate) -> seconds since 1970, or -1.
+long long http_date_parse(const char *s) {
+  static const char *const MON = "JanFebMarAprMayJunJulAugSepOctNovDec";
+  if (!s) return -1;
+  const char *c = strchr(s, ',');
+  if (!c) return -1;
+  int d, y, hh, mm, ss;
+  char mon[4] = {0};
+  if (sscanf(c + 1, " %d %3s %d %d:%d:%d", &d, mon, &y, &hh, &mm, &ss) != 6) return -1;
+  const char *m = strstr(MON, mon);
+  if (strlen(mon) != 3 || !m || (m - MON) % 3) return -1;
+  int mo = (int)(m - MON) / 3 + 1;
+  if (y < 1970 || y > 2200 || d < 1 || d > 31 || hh > 23 || mm > 59 || ss > 60) return -1;
+  // days from civil (proleptic Gregorian)
+  int yy = y - (mo <= 2);
+  long era = yy / 400;
+  long yoe = yy - era * 400;
+  long doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  long days = era * 146097 + doe - 719468;
+  return (long long)days * 86400 + hh * 3600 + mm * 60 + ss;
+}

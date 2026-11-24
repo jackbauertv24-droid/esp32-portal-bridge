@@ -100,6 +100,8 @@ static esp_err_t on_event(esp_http_client_event_t *e) {
   if (!strcasecmp(e->header_key, "Set-Cookie")) store_cookie(c->s, c->host, e->header_value);
   else if (!strcasecmp(e->header_key, "Location"))
     snprintf(c->resp->location, sizeof(c->resp->location), "%s", e->header_value);
+  else if (!strcasecmp(e->header_key, "Date"))
+    snprintf(c->resp->date, sizeof(c->resp->date), "%s", e->header_value);
   else if (!strcasecmp(e->header_key, "Content-Type"))
     snprintf(c->resp->content_type, sizeof(c->resp->content_type), "%s", e->header_value);
   return ESP_OK;

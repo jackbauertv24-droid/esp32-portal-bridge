@@ -27,6 +27,9 @@ int str_contains_ci(const char *hay, const char *needle);
 // Same phone number, ignoring formatting and country code: the last 8 digits
 // match (and there are at least 6).
 int phone_same(const char *a, const char *b);
+// Parses an HTTP Date header ("Tue, 24 Nov 2026 15:42:54 GMT") to Unix
+// seconds; -1 if it is not one.
+long long http_date_parse(const char *s);
 // `num` matches one entry of a comma/semicolon/space separated list.
 int phone_in_list(const char *num, const char *list);
 

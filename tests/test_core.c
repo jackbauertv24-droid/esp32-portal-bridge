@@ -55,6 +55,15 @@ static void test_phone_match(void) {
   CHECK("empty list", !phone_in_list("+85291234567", ""));
 }
 
+static void test_http_date(void) {
+  CHECK("http date", http_date_parse("Tue, 24 Nov 2026 15:42:54 GMT") == 1795534974LL);
+  CHECK("http date epoch", http_date_parse("Thu, 01 Jan 1970 00:00:00 GMT") == 0);
+  CHECK("http date leap day", http_date_parse("Thu, 29 Feb 2024 12:00:00 GMT") == 1709208000LL);
+  CHECK("http date junk", http_date_parse("yesterday") == -1);
+  CHECK("http date bad month", http_date_parse("Tue, 24 Foo 2026 15:42:54 GMT") == -1);
+  CHECK("http date null", http_date_parse(NULL) == -1);
+}
+
 static void test_otp(void) {
   char c[16];
   CHECK("otp found", otp_extract("Your code is 482913. Valid 5 min", 4, 8, c, sizeof c) && !strcmp(c, "482913"));
@@ -159,6 +168,7 @@ int main(void) {
   test_phone();
   test_otp();
   test_phone_match();
+  test_http_date();
   test_placeholders();
   test_url();
   test_forms();

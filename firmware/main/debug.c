@@ -68,7 +68,16 @@ static void query(httpd_req_t *req, const char *key, char *out, size_t cap) {
 #define CAM_HREF 41
 #define CAM_PCLK 46
 
-static void cam_config(camera_config_t *c, framesize_t fs, int xclk_hz, pixformat_t pf) {
+typedef struct {
+  bool psram;  // DMA straight into the PSRAM frame buffer (no internal buffer)
+  pixformat_t pf;
+  framesize_t fs;  // FRAMESIZE_INVALID = the size asked for
+  int quality;     // JPEG: lower number = better and bigger
+  int xclk_hz;
+  const char *name;
+} cam_try_t;
+
+static void cam_config(camera_config_t *c, const cam_try_t *t, framesize_t want) {
   *c = (camera_config_t){
       .pin_pwdn = -1,
       .pin_reset = -1,
@@ -86,13 +95,13 @@ static void cam_config(camera_config_t *c, framesize_t fs, int xclk_hz, pixforma
       .pin_vsync = CAM_VSYNC,
       .pin_href = CAM_HREF,
       .pin_pclk = CAM_PCLK,
-      .xclk_freq_hz = xclk_hz,
+      .xclk_freq_hz = t->xclk_hz,
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
-      .pixel_format = pf,
-      .frame_size = pf == PIXFORMAT_JPEG ? fs : FRAMESIZE_VGA,
-      .jpeg_quality = 12,
-      .fb_count = 1,
+      .pixel_format = t->pf,
+      .frame_size = t->fs == FRAMESIZE_INVALID ? want : t->fs,
+      .jpeg_quality = t->quality ? t->quality : 12,
+      .fb_count = t->psram ? 2 : 1,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
   };
@@ -131,52 +140,14 @@ static void driver_errors(const char *marker, char *out, size_t cap) {
   free(log);
 }
 
-// Starts the camera, trying the settings that most often matter: a slower
-// clock, and raw RGB565 for sensors without a JPEG encoder. Each attempt is
-// described in `log` (may be NULL).
-static esp_err_t cam_start(framesize_t fs, char *how, size_t hcap, cJSON *log) {
-  static const struct {
-    int hz;
-    pixformat_t pf;
-    const char *name;
-  } T[] = {{20000000, PIXFORMAT_JPEG, "JPEG, 20 MHz clock"},
-           {10000000, PIXFORMAT_JPEG, "JPEG, 10 MHz clock"},
-           {20000000, PIXFORMAT_RGB565, "RGB565, 20 MHz clock"},
-           {10000000, PIXFORMAT_RGB565, "RGB565, 10 MHz clock"}};
-  esp_err_t e = ESP_FAIL;
-  // Frames go straight to PSRAM by DMA, so the driver needs no 16-30 KB
-  // internal buffer (internal RAM is what the Wi-Fi radio needs).
-  esp_camera_set_psram_mode(true);
-  for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
-    camera_config_t c;
-    cam_config(&c, fs, T[i].hz, T[i].pf);
-    char marker[64];
-    snprintf(marker, sizeof(marker), "camera: trying %s", T[i].name);
-    devlog("%s", marker);
-    e = esp_camera_init(&c);
-    if (log) {
-      char why[400] = "", m[480];
-      if (e != ESP_OK) driver_errors(marker, why, sizeof(why));
-      snprintf(m, sizeof(m), "%s: %s%s%s", T[i].name, e == ESP_OK ? "started" : esp_err_to_name(e), why[0] ? " - " : "", why);
-      cJSON_AddItemToArray(log, cJSON_CreateString(m));
-    }
-    devlog("camera: init %s -> %s", T[i].name, esp_err_to_name(e));
-    if (e == ESP_OK) {
-      snprintf(how, hcap, "%s", T[i].name);
-      return ESP_OK;
-    }
-    esp_camera_deinit();
-    vTaskDelay(pdMS_TO_TICKS(50));
-  }
-  return e;
-}
-
 // Takes one picture as JPEG (converting raw frames). Caller frees *jpg.
+// Gives up at the first timeout so a failing setting costs only a few seconds.
 static bool cam_grab(uint8_t **jpg, size_t *len, int *w, int *h) {
   camera_fb_t *fb = NULL;
-  for (int i = 0; i < 4; i++) {  // let exposure settle
+  for (int i = 0; i < 3; i++) {  // let exposure settle
     if (fb) esp_camera_fb_return(fb);
     fb = esp_camera_fb_get();
+    if (!fb) break;
   }
   if (!fb) return false;
   bool ok;
@@ -192,36 +163,81 @@ static bool cam_grab(uint8_t **jpg, size_t *len, int *w, int *h) {
   return ok;
 }
 
+// Tries settings until one delivers a picture: frames straight to PSRAM first
+// (internal RAM is scarce), then smaller/lower-quality JPEG (the driver drops
+// frames that overflow their slot), then raw RGB565, and an internal DMA buffer
+// only if there is room for it. Each attempt is described in `log` (may be NULL).
+static bool cam_capture(framesize_t want, uint8_t **jpg, size_t *len, int *w, int *h, char *how, size_t hcap,
+                        char *sensor, size_t scap, cJSON *log) {
+  static const cam_try_t T[] = {
+      {true, PIXFORMAT_JPEG, FRAMESIZE_INVALID, 12, 20000000, "JPEG, frames to PSRAM"},
+      {true, PIXFORMAT_JPEG, FRAMESIZE_INVALID, 25, 20000000, "JPEG lower quality, frames to PSRAM"},
+      {true, PIXFORMAT_JPEG, FRAMESIZE_VGA, 35, 10000000, "JPEG 640x480 low quality, 10 MHz, frames to PSRAM"},
+      {true, PIXFORMAT_RGB565, FRAMESIZE_QVGA, 0, 10000000, "RGB565 320x240, frames to PSRAM"},
+      {false, PIXFORMAT_JPEG, FRAMESIZE_VGA, 12, 20000000, "JPEG 640x480, internal DMA buffer"},
+  };
+  for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+    char m[520], why[400] = "";
+    if (!T[i].psram && heap_caps_get_largest_free_block(MALLOC_CAP_DMA) < 17 * 1024) {
+      if (log) cJSON_AddItemToArray(log, cJSON_CreateString("internal DMA buffer: skipped, not enough internal RAM"));
+      continue;
+    }
+    esp_camera_set_psram_mode(T[i].psram);
+    camera_config_t c;
+    cam_config(&c, &T[i], want);
+    char marker[96];
+    snprintf(marker, sizeof(marker), "camera: trying %s", T[i].name);
+    devlog("%s", marker);
+    esp_err_t e = esp_camera_init(&c);
+    if (e != ESP_OK) {
+      driver_errors(marker, why, sizeof(why));
+      snprintf(m, sizeof(m), "%s: did not start (%s)%s%s", T[i].name, esp_err_to_name(e), why[0] ? " - " : "", why);
+      if (log) cJSON_AddItemToArray(log, cJSON_CreateString(m));
+      devlog("%s", m);
+      esp_camera_deinit();
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+    if (sensor && !sensor[0]) {
+      sensor_t *s = esp_camera_sensor_get();
+      const camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
+      snprintf(sensor, scap, "%s (PID 0x%04x)", info ? info->name : "unknown", s ? s->id.PID : 0);
+    }
+    bool ok = cam_grab(jpg, len, w, h);
+    if (!ok) driver_errors(marker, why, sizeof(why));
+    if (ok) snprintf(m, sizeof(m), "%s: picture %dx%d, %u bytes", T[i].name, *w, *h, (unsigned)*len);
+    else snprintf(m, sizeof(m), "%s: started, but no picture arrived%s%s", T[i].name, why[0] ? " - " : "", why);
+    if (log) cJSON_AddItemToArray(log, cJSON_CreateString(m));
+    devlog("%s", m);
+    esp_camera_deinit();
+    if (ok) {
+      snprintf(how, hcap, "%s", T[i].name);
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  return false;
+}
+
 static esp_err_t h_camera(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   char sz[8];
   query(req, "size", sz, sizeof(sz));
   framesize_t fs = !strcmp(sz, "uxga") ? FRAMESIZE_UXGA : !strcmp(sz, "vga") ? FRAMESIZE_VGA : FRAMESIZE_SVGA;
   battery_suspend();  // the camera's control bus shares GPIO15/16 with the battery gauge
-  char how[48] = "";
-  esp_err_t e = cam_start(fs, how, sizeof(how), NULL);
-  if (e != ESP_OK) {
-    battery_resume();
-    char m[200];
-    snprintf(m, sizeof(m), "camera: could not start (%s). Press \"Diagnose camera\" to find out whether it is the hardware.",
-             esp_err_to_name(e));
-    return send_json(req, result(false, m));
-  }
-  sensor_t *s = esp_camera_sensor_get();
-  const camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
-  char name[96];
-  snprintf(name, sizeof(name), "%s (PID 0x%04x), %s", info ? info->name : "unknown", s ? s->id.PID : 0, how);
+  char how[64] = "", sensor[64] = "";
   uint8_t *jpg = NULL;
   size_t len = 0;
   int w = 0, hgt = 0;
-  bool ok = cam_grab(&jpg, &len, &w, &hgt);
-  esp_camera_deinit();
+  bool ok = cam_capture(fs, &jpg, &len, &w, &hgt, how, sizeof(how), sensor, sizeof(sensor), NULL);
   battery_resume();
   if (!ok) {
-    char m[160];
-    snprintf(m, sizeof(m), "camera: sensor %s started but no picture arrived. Press \"Diagnose camera\".", name);
+    char m[200];
+    snprintf(m, sizeof(m), "camera: no picture%s%s. Press \"Diagnose camera\" for details.", sensor[0] ? " from " : "", sensor);
     return send_json(req, result(false, m));
   }
+  char name[140];
+  snprintf(name, sizeof(name), "%s, %s", sensor, how);
   devlog("debug: PASS camera %s, %dx%d JPEG %u bytes", name, w, hgt, (unsigned)len);
   httpd_resp_set_type(req, "image/jpeg");
   httpd_resp_set_hdr(req, "X-Camera", name);
@@ -333,17 +349,6 @@ static int idle_level(int pin) {
   return hi >= 18 ? 1 : hi <= 2 ? 0 : -1;  // -1 = floating / noisy
 }
 
-// Counts level changes on a pin for `ms` (fast signals alias, but any change shows activity).
-static int activity(int pin, int ms) {
-  int changes = 0, last = gpio_get_level(pin);
-  int64_t end = esp_timer_get_time() + ms * 1000;
-  while (esp_timer_get_time() < end) {
-    int v = gpio_get_level(pin);
-    if (v != last) changes++, last = v;
-  }
-  return changes;
-}
-
 static void step(cJSON *arr, const char *name, int ok, const char *detail) {
   cJSON *o = cJSON_CreateObject();
   cJSON_AddStringToObject(o, "step", name);
@@ -388,34 +393,26 @@ static esp_err_t h_camdiag(httpd_req_t *req) {
   cams = cams > cams_clk ? cams : cams_clk;
 
   cJSON *tries = cJSON_CreateArray();
-  char how[48] = "";
-  esp_err_t e = cam_start(FRAMESIZE_VGA, how, sizeof(how), tries);
+  char how[64] = "", sensor[64] = "";
+  uint8_t *jpg = NULL;
+  size_t len = 0;
+  int w = 0, hgt = 0;
+  bool frame = cam_capture(FRAMESIZE_VGA, &jpg, &len, &w, &hgt, how, sizeof(how), sensor, sizeof(sensor), tries);
+  free(jpg);
   char *tj = cJSON_PrintUnformatted(tries);
   cJSON_Delete(tries);
-  step(st, "Camera driver start", e == ESP_OK, tj ? tj : "");
+  bool started = tj && strstr(tj, "started");
+  step(st, "Camera settings tried", frame, tj ? tj : "");
   free(tj);
-  bool frame = false;
-  if (e == ESP_OK) {
-    sensor_t *s = esp_camera_sensor_get();
-    const camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
-    snprintf(d, sizeof(d), "%s, PID 0x%04x, %s", info ? info->name : "unknown", s ? s->id.PID : 0, how);
-    step(st, "Sensor", 1, d);
-    int v = activity(CAM_VSYNC, 300), hr = activity(CAM_HREF, 100), pc = activity(CAM_PCLK, 20);
-    snprintf(d, sizeof(d), "changes seen: VSYNC %d, HREF %d, PCLK %d", v, hr, pc);
-    step(st, "Picture signals from the sensor", v > 0 && pc > 0, d);
-    uint8_t *jpg = NULL;
-    size_t len = 0;
-    int w = 0, hgt = 0;
-    frame = cam_grab(&jpg, &len, &w, &hgt);
-    free(jpg);
-    snprintf(d, sizeof(d), frame ? "%dx%d, %u bytes as JPEG" : "no frame within the timeout", w, hgt, (unsigned)len);
-    step(st, "Picture", frame, d);
-    if (!frame)
-      verdict = v == 0 ? "The sensor answers and accepts its settings but sends no picture signals. Most likely the ribbon cable is not fully seated (control lines work, data lines do not) or the module is faulty."
-                       : "Picture signals arrive but no frame is assembled. This points to firmware timing; send a report.",
-      kind = v == 0 ? "hardware (likely)" : "firmware";
-    esp_camera_deinit();
+  if (sensor[0]) step(st, "Sensor (driver)", 1, sensor);
+  if (frame) {
+    snprintf(d, sizeof(d), "%dx%d, %u bytes as JPEG, using %s", w, hgt, (unsigned)len, how);
+    step(st, "Picture", 1, d);
   }
+  esp_err_t e = frame || started || sensor[0] ? ESP_OK : ESP_FAIL;
+  if (!frame && e == ESP_OK)
+    verdict = "The sensor starts but no setting produced a complete picture. This is the driver/firmware side; send a report.",
+    kind = "firmware";
   battery_resume();
 
   if (frame) verdict = "The camera works.", kind = "none";

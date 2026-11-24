@@ -39,6 +39,7 @@ typedef struct {
   char *body;              // malloc'd, NUL-terminated (may be NULL)
   size_t body_len;
   char err[96];
+  char date[40];           // Date header of the last response ("" if none)
 } httpc_resp_t;
 
 // Initialises a session from the settings (user agent, TLS verification).

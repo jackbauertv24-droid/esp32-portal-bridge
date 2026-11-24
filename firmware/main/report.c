@@ -16,6 +16,9 @@
 #include "esp_chip_info.h"
 #include "esp_core_dump.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_ota_ops.h"
 #include "esp_spiffs.h"
 #include "esp_system.h"
@@ -133,6 +136,25 @@ char *report_build(void) {
            (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
            (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
   put(&s, line);
+  extern void alloc_failures(char *out, size_t cap);
+  alloc_failures(line, sizeof(line));
+  put(&s, line);
+  put(&s, "\n");
+  // Each task's unused stack: shows which stacks are oversized (and which are
+  // in internal RAM), to tune memory.
+  UBaseType_t nt = uxTaskGetNumberOfTasks();
+  TaskStatus_t *ts = heap_caps_malloc(sizeof(TaskStatus_t) * (nt + 4), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (ts) {
+    nt = uxTaskGetSystemState(ts, nt + 4, NULL);
+    put(&s, "tasks (unused stack bytes, stack in internal/PSRAM):");
+    for (UBaseType_t i = 0; i < nt; i++) {
+      bool ext = esp_ptr_external_ram(ts[i].pxStackBase);
+      snprintf(line, sizeof(line), " %s %u%s;", ts[i].pcTaskName, (unsigned)ts[i].usStackHighWaterMark, ext ? " psram" : "");
+      put(&s, line);
+    }
+    put(&s, "\n");
+    free(ts);
+  }
   esp_core_dump_summary_t *cd = malloc(sizeof(esp_core_dump_summary_t));
   if (cd && esp_core_dump_get_summary(cd) == ESP_OK) {
     snprintf(line, sizeof(line), "LAST CRASH: task %s, pc 0x%08lx, backtrace:", cd->exc_task,
