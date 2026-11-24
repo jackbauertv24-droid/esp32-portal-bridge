@@ -7,3 +7,4 @@ dependencies:
   # declares them as private dependencies, so they are declared here too.
   espressif/modem_at: "0.1.0"
   espressif/iot_eth: "1.1.0"
+  espressif/esp32-camera: "2.1.8"

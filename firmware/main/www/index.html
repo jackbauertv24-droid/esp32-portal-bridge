@@ -49,7 +49,7 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
 <header>
   <div class="top"><span class="dot" id="dot"></span><b>Portal Bridge</b><small id="fw"></small></div>
   <nav id="nav">
-    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#settings">Settings</a><a href="#tools">Tools</a>
+    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
   </nav>
 </header>
 <main>
@@ -183,6 +183,54 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
   </div>
 </section>
 
+<section id="p-debug" class="hidden">
+  <div class="card">
+    <h2>Hardware test</h2>
+    <p class="mut">Each result is also written to the device log, so <b>Tools › Send to GitHub issue</b> afterwards includes it.</p>
+    <button onclick="quickAll()">Run quick tests</button>
+    <div id="dbg_quick"></div>
+  </div>
+  <div class="card">
+    <h2>Camera</h2>
+    <p class="mut">Needs the camera DIP switch ON and the camera ribbon cable seated.</p>
+    <div class="row"><select id="cam_size" style="width:auto"><option value="vga">640×480</option><option value="svga" selected>800×600</option><option value="uxga">1600×1200</option></select>
+    <button onclick="camShot()">Take photo</button></div>
+    <div class="msg" id="cam_msg"></div><img id="cam_img" style="max-width:100%;margin-top:10px;border-radius:8px" class="hidden" alt="camera test photo">
+  </div>
+  <div class="card">
+    <h2>Speaker (through the modem)</h2>
+    <p class="mut">The speaker and microphone connectors are wired to the 4G modem, so the modem plays and records.</p>
+    <label>Volume</label><select id="spk_vol"><option>0</option><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option></select>
+    <label>Text to speak</label><input id="spk_text" value="Portal Bridge speaker test. One, two, three.">
+    <button onclick="speak()">Speak</button><button class="sec" onclick="at(['AT+CTTS=0','AT+CCMXSTOP'],'spk_out')">Stop</button>
+    <pre id="spk_out" class="hidden"></pre>
+  </div>
+  <div class="card">
+    <h2>Microphone</h2>
+    <div class="row"><select id="mic_secs" style="width:auto"><option>3</option><option selected>5</option><option>10</option></select><span class="mut">seconds</span>
+    <button onclick="micTest()">Record, then play back</button></div>
+    <pre id="mic_out" class="hidden"></pre>
+  </div>
+  <div class="card">
+    <h2>Voice call</h2>
+    <p class="mut">Calls a number with the SIM in the board; talk through the microphone and speaker.</p>
+    <div class="row"><input id="call_no" inputmode="tel" placeholder="number" style="flex:1"><button onclick="dial()">Call</button>
+    <button class="danger" onclick="at(['AT+CHUP'],'call_out')">Hang up</button></div>
+    <pre id="call_out" class="hidden"></pre>
+  </div>
+  <div class="card">
+    <h2>GNSS (GPS)</h2>
+    <p class="mut">Needs the GNSS antenna and open sky; a first fix can take a few minutes.</p>
+    <button onclick="gnss(true)">Start and watch</button><button class="sec" onclick="gnss(false)">Stop</button>
+    <pre id="gnss_out" class="hidden"></pre>
+  </div>
+  <div class="card">
+    <h2>LED and BOOT button</h2>
+    <button class="sec" onclick="led('r')">Red</button><button class="sec" onclick="led('g')">Green</button><button class="sec" onclick="led('b')">Blue</button><button class="sec" onclick="led('w')">White</button>
+    <button onclick="buttonTest()">Test BOOT button</button>
+    <div class="msg" id="btn_msg"></div>
+  </div>
+</section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -199,7 +247,7 @@ function go(p){location.hash=p}
 function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
 function route(){
   page=(location.hash||'#status').slice(1);
-  if(!['status','portal','sms','settings','tools'].includes(page))page='status';
+  if(!['status','portal','sms','settings','tools','debug'].includes(page))page='status';
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
   document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
   if(st&&!st.board.setup_done)return showSetup();
@@ -374,6 +422,59 @@ async function restore(){const f=$('bkfile').files[0];if(!f)return msg('bk_msg',
   const r=await jpost('/api/settings',await f.text());msg('bk_msg',r.message+(r.reboot?' Restart to apply everything.':''),r.ok?'ok':'bad')}
 async function resetAll(){if(!confirm('Reset ALL settings to defaults, including passwords? The SMS store is kept.'))return;const r=await jpost('/api/settings/reset');msg('bk_msg',r.message)}
 async function reboot(){if(!confirm('Restart the board?'))return;await fetch('/api/reboot',{method:'POST'});document.body.insertAdjacentHTML('afterbegin','<div class="msg" style="margin:12px">Restarting… reload in 30 seconds.</div>')}
+
+function line(id,t){const o=$(id);o.classList.remove("hidden");o.textContent+=t+"\n";o.scrollTop=o.scrollHeight}
+async function at(cmds,out){for(const c of cmds){line(out,"> "+c);const r=await jpost("/api/at",{cmd:c});line(out,(r.reply||"")+(r.ok?"\nOK":""))}}
+async function dget(p){return (await api(p)).json()}
+async function quickAll(){
+  const box=$("dbg_quick");box.innerHTML="";
+  const add=(name,ok,m)=>box.insertAdjacentHTML("beforeend",'<div class="ev"><b class="'+(ok?"ok":"bad")+'">'+(ok?"PASS":"FAIL")+"</b> "+esc(name)+" · "+esc(m)+"</div>");
+  const s=await (await fetch("/api/status")).json();
+  add("Modem (serial)",s.modem.alive,s.modem.alive?s.modem.model+" "+s.modem.revision:"not answering (4G DIP switch?)");
+  add("SIM",s.modem.sim=="READY",s.modem.sim||"-");
+  add("LTE network",/registered/.test(s.modem.lte_reg),s.modem.lte_reg+" · CSQ "+s.modem.csq);
+  add("4G data (USB)",s.lte.up,s.lte.enabled?(s.lte.up?"connected "+s.lte.ip:"not connected (USB route switch OFF? SIM data plan?)"):"disabled in settings");
+  add("Battery gauge",s.battery.found,s.battery.found?(s.battery.volts||0).toFixed(2)+" V on SDA "+s.battery.sda+" / SCL "+s.battery.scl:"not found");
+  for(const [n,p] of [["Memory","/api/debug/mem"],["Temperature","/api/debug/temp"],["TF card","/api/debug/sd"]]){
+    try{const r=await dget(p);add(n,r.ok,r.message)}catch(e){add(n,false,String(e))}}
+  try{const w=await dget("/api/wifi/scan");add("Wi-Fi radio",w.length>0,w.length+" networks visible")}catch(e){add("Wi-Fi radio",false,String(e))}
+  for(const c of ["r","g","b"]){await fetch("/api/debug/led?c="+c);await new Promise(r=>setTimeout(r,700))}
+  add("LED",true,"cycled red, green, blue - check you saw all three");
+  await camShot();add("Camera",!$("cam_img").classList.contains("hidden"),$("cam_msg").textContent)}
+async function camShot(){
+  msg("cam_msg","Capturing…");$("cam_img").classList.add("hidden");
+  try{const r=await api("/api/debug/camera?size="+$("cam_size").value);
+    if((r.headers.get("Content-Type")||"").startsWith("image/")){const b=await r.blob();$("cam_img").src=URL.createObjectURL(b);$("cam_img").classList.remove("hidden");
+      msg("cam_msg","OK: "+(r.headers.get("X-Camera")||"camera")+", "+Math.round(b.size/1024)+" KB","ok")}
+    else{const j=await r.json();msg("cam_msg",j.message,"bad")}}catch(e){msg("cam_msg","Failed: "+e,"bad")}}
+function ucs2(t){return [...t].map(c=>{const u=c.codePointAt(0);if(u<0x10000)return u.toString(16).toUpperCase().padStart(4,"0");
+  const v=u-0x10000;return ((0xD800|(v>>10)).toString(16)+(0xDC00|(v&0x3FF)).toString(16)).toUpperCase()}).join("")}
+async function speak(){
+  const t=$("spk_text").value;const ascii=/^[\x20-\x7e]*$/.test(t)&&!t.includes('"');
+  await at(["AT+CDTAM=0","AT+CLVL="+$("spk_vol").value,ascii?'AT+CTTS=2,"'+t+'"':'AT+CTTS=1,"'+ucs2(t)+'"'],"spk_out");
+  line("spk_out","(Nothing heard? Check the speaker connector. ERROR on AT+CTTS means this modem firmware has no text-to-speech; try the microphone test, which plays a recording.)")}
+async function micTest(){
+  const s=+$("mic_secs").value,o="mic_out";$(o).textContent="";
+  await at(["AT+CDTAM=0",'AT+CREC=1,"C:/pbtest.wav"'],o);
+  line(o,"Recording "+s+" s - speak now…");await new Promise(r=>setTimeout(r,s*1000));
+  await at(["AT+CREC=0","AT+CLVL="+$("spk_vol").value],o);
+  const r=await jpost("/api/at",{cmd:'AT+CCMXPLAY="C:/pbtest.wav",0,0'});
+  line(o,'> AT+CCMXPLAY="C:/pbtest.wav",0,0\n'+(r.reply||"")+(r.ok?"\nOK":""));
+  if(!r.ok)await at(['AT+CCMXPLAY="C:/pbtest.wav",0'],o);
+  line(o,"Playing back through the speaker.")}
+function dial(){const n=$("call_no").value.trim();if(n)at(["ATD"+n+";"],"call_out")}
+let gnssTimer=null;
+async function gnss(on){
+  clearInterval(gnssTimer);if(!on){await at(["AT+CGNSSPWR=0"],"gnss_out");return}
+  await at(["AT+CGNSSPWR=1"],"gnss_out");
+  gnssTimer=setInterval(async()=>{if(page!="debug"){clearInterval(gnssTimer);return}
+    const r=await jpost("/api/at",{cmd:"AT+CGNSSINFO"});const txt=(r.reply||"").replace(/\n/g," ");
+    const fix=/CGNSSINFO: *\d/.test(txt);line("gnss_out",new Date().toLocaleTimeString()+" "+txt+(fix?"  <- FIX":""))},5000)}
+async function led(c){await fetch("/api/debug/led?c="+c)}
+async function buttonTest(){
+  msg("btn_msg","Press and release BOOT within 10 seconds…");let down=false,up=false;const end=Date.now()+10000;
+  while(Date.now()<end&&!(down&&up)){const r=await dget("/api/debug/button");if(r.pressed)down=true;else if(down)up=true;await new Promise(r=>setTimeout(r,150))}
+  msg("btn_msg",down?"PASS: BOOT button works.":"FAIL: no press seen.",down?"ok":"bad")}
 
 tick().then(route);setInterval(()=>{if(page=='status'||page=='portal')tick()},5000);
 </script>

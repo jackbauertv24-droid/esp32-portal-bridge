@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "board.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_strip.h"
@@ -11,6 +12,8 @@
 #include "settings.h"
 
 static led_strip_handle_t strip;
+static volatile int64_t test_until;
+static volatile int tr, tg, tb;
 
 static void set(int r, int g, int b) {
   int bri = cfg_int("led_bri");
@@ -22,6 +25,12 @@ static void led_task(void *arg) {
   set(0, 0, 255);
   vTaskDelay(pdMS_TO_TICKS(3000));
   for (int tick = 0;; tick++) {
+    if (esp_timer_get_time() < test_until) {
+      led_strip_set_pixel(strip, 0, tr, tg, tb);
+      led_strip_refresh(strip);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
     if (!cfg_bool("setup_done")) set(255, 160, 0);
     else if (netmgr_online()) set(0, 255, 0);
     else if (netmgr_wifi_state() == NET_CAPTIVE) set(0, (tick & 1) ? 200 : 60, 255);
@@ -42,4 +51,11 @@ void led_start(void) {
   if (led_strip_new_rmt_device(&sc, &rc, &strip) != ESP_OK) return;
   led_strip_clear(strip);
   xTaskCreate(led_task, "led", 3072, NULL, 1, NULL);
+}
+
+void led_test(int r, int g, int b, int ms) {
+  tr = r;
+  tg = g;
+  tb = b;
+  test_until = esp_timer_get_time() + (int64_t)ms * 1000;
 }

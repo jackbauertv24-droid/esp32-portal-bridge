@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "debug.h"
 #include "mirror.h"
 #include "modem_at.h"
 #include "netmgr.h"
@@ -562,7 +563,7 @@ static esp_err_t h_any(httpd_req_t *req) {
 void web_start(void) {
   httpd_config_t c = HTTPD_DEFAULT_CONFIG();
   c.stack_size = 24576;
-  c.max_uri_handlers = 48;
+  c.max_uri_handlers = 64;
   c.max_open_sockets = 7;
   c.lru_purge_enable = true;
   c.recv_wait_timeout = 30;
@@ -615,6 +616,7 @@ void web_start(void) {
     httpd_register_uri_handler(server, &u);
   }
   mirror_register(server, auth);
+  debug_register(server, gate);
   httpd_uri_t any = {.uri = "/*", .method = HTTP_GET, .handler = h_any};
   httpd_register_uri_handler(server, &any);
   char ip[16];

@@ -51,3 +51,14 @@ void battery_status_json(cJSON *root) {
   if (read_reg(0x02, &v)) cJSON_AddNumberToObject(o, "volts", v * 78.125e-6);
   if (read_reg(0x04, &v)) cJSON_AddNumberToObject(o, "percent", v / 256.0);
 }
+
+void battery_suspend(void) {
+  if (dev) i2c_master_bus_rm_device(dev);
+  if (bus) i2c_del_master_bus(bus);
+  dev = NULL;
+  bus = NULL;
+}
+
+void battery_resume(void) {
+  if (!bus) battery_init();
+}
