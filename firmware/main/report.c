@@ -19,6 +19,7 @@
 #include "esp_timer.h"
 #include "events.h"
 #include "forward.h"
+#include "lb.h"
 #include "lte.h"
 #include "mirror.h"
 #include "modem_at.h"
@@ -65,6 +66,7 @@ cJSON *status_json(void) {
   cJSON_AddNumberToObject(b, "sms_unread", last > seen ? last - seen : 0);
   netmgr_status_json(root);
   lte_status_json(root);
+  lb_status_json(root);
   modem_status_json(root);
   portal_status_json(root);
   mirror_status_json(root);

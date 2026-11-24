@@ -219,7 +219,7 @@ async function tick(){
     $('t_net').innerHTML=row('Hotspot uses',n.uplink=='none'?'no uplink':(n.uplink=='4g'?'4G':'Wi-Fi')+(n.online?' · online':' · no internet'),n.online?'ok':'bad')
       +row('Upstream Wi-Fi',n.wifi_connected?esc(n.wifi_ssid)+' ('+n.wifi_rssi+' dBm) · '+esc(n.wifi_state):'not connected',n.wifi_state=='online'?'ok':(n.wifi_state=='login page'?'warn':''))
       +row('4G data',!l.enabled?'off in settings':(l.up?'connected · '+esc(n.lte_state)+' · up '+dur(l.up_s):'not connected'),l.up?'ok':'warn')
-      +row('Devices on hotspot',n.clients)+row('Admin address','http://'+esc(n.ap_ip)+'/');
+      +(st.lb?row('Wi-Fi + 4G together',st.lb.mode=='off'?'off':(st.lb.active?'active · Wi-Fi '+st.lb.wifi_pct+'% / 4G '+(100-st.lb.wifi_pct)+'% · packets '+st.lb.packets_wifi+' / '+st.lb.packets_4g:'on, waiting for both uplinks to be online'),st.lb.active?'ok':''):'')+row('Devices on hotspot',n.clients)+row('Admin address','http://'+esc(n.ap_ip)+'/');
     renderPortal();
     $('t_modem').innerHTML=row('Modem',m.alive?'answering':'not answering — check the 4G DIP switch',m.alive?'ok':'bad')
       +(m.alive?row('SIM',esc(m.sim),m.sim=='READY'?'ok':'bad')+row('Operator',esc(m.operator||'–'))

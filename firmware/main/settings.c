@@ -56,6 +56,8 @@ static const def_t DEFS[] = {
      "body) when there is internet. Anything else means a login page or no internet.", T_STR,
      "http://connectivitycheck.gstatic.com/generate_204", 10, 200, "url", false},
     {"probe_s", "Internet uplink", "Check interval (s)", NULL, T_INT, "30", 10, 600, NULL, false},
+    {"lb_mode", "Internet uplink", "Use Wi-Fi and 4G together", "balance = when both are online, spread traffic over both. Each device+site pair sticks to one link, so a single download is not faster; many sites or several devices are. Uses 4G data even when Wi-Fi works.", T_ENUM, "off", 0, 0, "off|balance", false},
+    {"lb_wifi_pct", "Internet uplink", "Share sent over Wi-Fi (%)", "The rest goes over 4G.", T_INT, "50", 10, 90, NULL, false},
     // 4G
     {"lte_en", "4G", "Use 4G data", "Needs the USB DIP switch set to modem <-> ESP32.", T_BOOL, "1", 0, 0, NULL,
      true},

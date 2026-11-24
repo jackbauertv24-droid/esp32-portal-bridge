@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "html_form.h"
 #include "httpc.h"
+#include "lb.h"
 #include "lte.h"
 #include "settings.h"
 #include "urlutil.h"
@@ -59,6 +60,7 @@ static void offer_dns_from(esp_netif_t *nif) {
   esp_netif_dhcps_stop(ap_if);
   esp_netif_dhcps_option(ap_if, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer, sizeof(offer));
   esp_netif_set_dns_info(ap_if, ESP_NETIF_DNS_MAIN, &dns);
+  lb_set_dns(dns.ip.u_addr.ip4.addr);
   esp_netif_dhcps_start(ap_if);
 }
 
@@ -254,6 +256,9 @@ static void net_task(void *arg) {
     if (!lte_up()) lte_state = NET_UNKNOWN;
     recheck_now = false;
     select_uplink();
+    char apip[16];
+    netmgr_ap_ip(apip, sizeof(apip));
+    lb_update(sta_if, sta_has_ip && wifi_state == NET_ONLINE, lte_netif(), lte_up() && lte_state != NET_OFFLINE, apip);
     for (int i = 0; i < 20 && !recheck_now && !reconnect_now; i++) vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
