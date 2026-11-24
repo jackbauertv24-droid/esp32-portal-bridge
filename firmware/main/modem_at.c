@@ -512,6 +512,14 @@ static const char *reg_name(int s) {
   }
 }
 
+void modem_radio(int *csq, char *oper, size_t ocap, char *cpsi, size_t ccap) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  if (csq) *csq = st.csq;
+  if (oper) snprintf(oper, ocap, "%s", st.oper);
+  if (cpsi) snprintf(cpsi, ccap, "%s", st.cpsi);
+  xSemaphoreGive(lock);
+}
+
 void modem_status_json(cJSON *root) {
   cJSON *m = cJSON_AddObjectToObject(root, "modem");
   xSemaphoreTake(lock, portMAX_DELAY);

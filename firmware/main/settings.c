@@ -69,6 +69,14 @@ static const def_t DEFS[] = {
     {"dm_budget", "Data & budget", "Monthly budget", "0 = none. With a price set, the budget also acts as a limit (budget / price = GB).", T_STR, "0", 1, 12, "decimal", false},
     {"dm_curr", "Data & budget", "Currency", NULL, T_STR, "HKD", 1, 6, NULL, false},
     {"dm_overhead", "Data & budget", "Carrier overhead (%)", "Added to measured 4G bytes, since carriers also bill protocol overhead. Raise it if your carrier's figure is higher.", T_INT, "3", 0, 20, NULL, false},
+    // Speed test
+    {"sp_down_url", "Speed test", "Download test URL", "{bytes} is replaced by the size to fetch; also used for the latency check with 0 bytes.", T_STR, "https://speed.cloudflare.com/__down?bytes={bytes}", 10, 200, "url", false},
+    {"sp_up_url", "Speed test", "Upload test URL", "Receives a POST of the upload size.", T_STR, "https://speed.cloudflare.com/__up", 10, 200, "url", false},
+    {"sp_down_mb", "Speed test", "Wi-Fi: download size (MB)", "The test also stops after the time limit below. 0 = skip.", T_INT, "25", 0, 500, NULL, false},
+    {"sp_up_mb", "Speed test", "Wi-Fi: upload size (MB)", "0 = skip.", T_INT, "10", 0, 200, NULL, false},
+    {"sp_lte_down", "Speed test", "4G: download size (MB)", "Counts against your 4G data. 0 = skip.", T_INT, "10", 0, 500, NULL, false},
+    {"sp_lte_up", "Speed test", "4G: upload size (MB)", "0 = skip.", T_INT, "3", 0, 200, NULL, false},
+    {"sp_max_s", "Speed test", "Time limit per direction (s)", NULL, T_INT, "12", 5, 60, NULL, false},
     // 4G
     {"lte_en", "4G", "Use 4G data", "Needs the USB DIP switch set to modem <-> ESP32.", T_BOOL, "1", 0, 0, NULL,
      true},

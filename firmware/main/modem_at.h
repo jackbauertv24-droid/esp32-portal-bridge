@@ -14,6 +14,9 @@ void modem_uart_start(void);
 char *modem_cmd(const char *cmd, int timeout_ms, bool *ok);
 
 bool modem_alive(void);
+// Latest radio readings from the periodic status refresh: CSQ (99 = unknown),
+// operator name and the raw AT+CPSI line (any pointer may be NULL).
+void modem_radio(int *csq, char *oper, size_t ocap, char *cpsi, size_t ccap);
 // Own number as read from the SIM (+CNUM), "" if unknown.
 void modem_own_number(char *out, size_t cap);
 void modem_status_json(cJSON *root);

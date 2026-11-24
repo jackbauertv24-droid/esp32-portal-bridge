@@ -28,6 +28,7 @@
 #include "report.h"
 #include "settings.h"
 #include "smsstore.h"
+#include "speedtest.h"
 #include "survey.h"
 #include "web.h"
 
@@ -498,6 +499,31 @@ static esp_err_t h_survey(httpd_req_t *req) {
   return send_json(req, survey_json());
 }
 
+static esp_err_t h_speed(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, speedtest_json());
+}
+
+// POST {action: "start"|"stop"|"clear", via: "wifi"|"4g"|"both"}
+static esp_err_t h_speed_post(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 256);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *act = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "action")) : NULL;
+  const char *via = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "via")) : NULL;
+  char err[120] = "";
+  bool ok = true;
+  const char *m = "ok";
+  if (act && !strcmp(act, "start")) ok = speedtest_start(via ? via : "", err, sizeof(err)), m = ok ? "Test started." : err;
+  else if (act && !strcmp(act, "stop")) speedtest_stop(), m = "Stopping.";
+  else if (act && !strcmp(act, "clear")) speedtest_clear(), m = "History cleared.";
+  else ok = false, m = "unknown action";
+  esp_err_t e = send_result(req, ok, m);
+  cJSON_Delete(o);
+  return e;
+}
+
 static esp_err_t h_update(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -659,6 +685,8 @@ void web_start(void) {
       {"/api/telegram/chats", HTTP_GET, h_tg_chats},
       {"/api/wifi/scan", HTTP_GET, h_scan},
       {"/api/wifi/survey", HTTP_GET, h_survey},
+      {"/api/speed", HTTP_GET, h_speed},
+      {"/api/speed", HTTP_POST, h_speed_post},
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},
