@@ -26,7 +26,7 @@ void netmgr_recheck(void);
 void netmgr_reconnect(void);
 void netmgr_status_json(cJSON *root);
 void netmgr_summary(char *out, size_t cap);
-// Current hotspot gateway address, e.g. "192.168.0.1".
+// Current hotspot gateway address, e.g. "10.88.88.1".
 void netmgr_ap_ip(char *out, size_t cap);
 // The hotspot interface (NULL before netmgr_start).
 esp_netif_t *netmgr_ap_netif(void);

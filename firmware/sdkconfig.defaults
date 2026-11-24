@@ -21,6 +21,9 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 
 # Router: NAT from the hotspot to Wi-Fi or 4G (PPP over USB)
 CONFIG_LWIP_IP_FORWARD=y
+# mDNS name for the admin page on the hotspot only, never on the venue network.
+CONFIG_MDNS_PREDEF_NETIF_STA=n
+CONFIG_MDNS_PREDEF_NETIF_ETH=n
 CONFIG_LWIP_IPV4_NAPT=y
 CONFIG_LWIP_PPP_SUPPORT=y
 CONFIG_LWIP_MAX_SOCKETS=16

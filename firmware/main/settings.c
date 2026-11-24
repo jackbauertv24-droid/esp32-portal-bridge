@@ -39,7 +39,8 @@ static const def_t DEFS[] = {
     {"ap_maxcli", "Hotspot", "Max devices", NULL, T_INT, "8", 1, 10, NULL, true},
     {"dev_alert", "Hotspot", "Alert when a new device joins", "Sent through the forwarding channels the first time a device is seen. The device name goes only to those channels, not into reports.", T_BOOL, "0", 0, 0, NULL, false},
     {"ap_ip", "Hotspot", "Admin address", "Gateway address of the hotspot and of this admin page. If an upstream "
-     "network uses the same range, the board moves to 10.42.0.1 automatically and logs it.", T_STR, "192.168.0.1",
+     "network uses the same range, the board moves to a spare address (10.88.88.1, 172.31.88.1, 192.168.233.1, "
+     "10.42.0.1), sends an alert and reconnects hotspot devices. http://portalbridge.local/ works on any address.", T_STR, "10.88.88.1",
      7, 15, "ip", true},
     // Admin
     {"adm_pass", "Admin", "Admin password", "User name is always admin. 8+ characters.", T_SECRET, "portalbridge", 8,

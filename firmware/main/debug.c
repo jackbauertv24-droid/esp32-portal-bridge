@@ -16,7 +16,11 @@
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h"
 #include "driver/temperature_sensor.h"
+#include "driver/i2c_master.h"
+#include "driver/ledc.h"
 #include "esp_camera.h"
+#include "esp_rom_sys.h"
+#include "img_converters.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_psram.h"
@@ -55,18 +59,22 @@ static void query(httpd_req_t *req, const char *key, char *out, size_t cap) {
 
 // ---------- camera ----------
 
-static esp_err_t h_camera(httpd_req_t *req) {
-  if (gate(req) != ESP_OK) return ESP_OK;
-  char sz[8];
-  query(req, "size", sz, sizeof(sz));
-  framesize_t fs = !strcmp(sz, "uxga") ? FRAMESIZE_UXGA : !strcmp(sz, "vga") ? FRAMESIZE_VGA : FRAMESIZE_SVGA;
-  // Waveshare pin map for this board (CAMERA_MODEL_WAVESHARE_7670_BOARD in their demo).
-  camera_config_t c = {
+// Waveshare pin map for this board (CAMERA_MODEL_WAVESHARE_7670_BOARD in
+// their ESP32-S3-A-SIM7670X-4G-V2 demo).
+#define CAM_XCLK 39
+#define CAM_SDA 15
+#define CAM_SCL 16
+#define CAM_VSYNC 42
+#define CAM_HREF 41
+#define CAM_PCLK 46
+
+static void cam_config(camera_config_t *c, framesize_t fs, int xclk_hz, pixformat_t pf) {
+  *c = (camera_config_t){
       .pin_pwdn = -1,
       .pin_reset = -1,
-      .pin_xclk = 39,
-      .pin_sccb_sda = 15,
-      .pin_sccb_scl = 16,
+      .pin_xclk = CAM_XCLK,
+      .pin_sccb_sda = CAM_SDA,
+      .pin_sccb_scl = CAM_SCL,
       .pin_d7 = 14,
       .pin_d6 = 13,
       .pin_d5 = 12,
@@ -75,53 +83,273 @@ static esp_err_t h_camera(httpd_req_t *req) {
       .pin_d2 = 9,
       .pin_d1 = 8,
       .pin_d0 = 7,
-      .pin_vsync = 42,
-      .pin_href = 41,
-      .pin_pclk = 46,
-      .xclk_freq_hz = 20000000,
+      .pin_vsync = CAM_VSYNC,
+      .pin_href = CAM_HREF,
+      .pin_pclk = CAM_PCLK,
+      .xclk_freq_hz = xclk_hz,
       .ledc_timer = LEDC_TIMER_0,
       .ledc_channel = LEDC_CHANNEL_0,
-      .pixel_format = PIXFORMAT_JPEG,
-      .frame_size = fs,
+      .pixel_format = pf,
+      .frame_size = pf == PIXFORMAT_JPEG ? fs : FRAMESIZE_VGA,
       .jpeg_quality = 12,
       .fb_count = 1,
       .fb_location = CAMERA_FB_IN_PSRAM,
       .grab_mode = CAMERA_GRAB_LATEST,
   };
-  battery_suspend();  // the camera's control bus shares GPIO15/16 with the battery gauge
-  esp_err_t e = esp_camera_init(&c);
-  if (e != ESP_OK) {
-    battery_resume();
-    char m[200];
-    snprintf(m, sizeof(m), "camera: init failed (%s). Is the camera DIP switch ON and the ribbon cable seated?",
-             esp_err_to_name(e));
-    return send_json(req, result(false, m));
+}
+
+// Starts the camera, trying the settings that most often matter: a slower
+// clock, and raw RGB565 for sensors without a JPEG encoder. Each attempt is
+// described in `log` (may be NULL).
+static esp_err_t cam_start(framesize_t fs, char *how, size_t hcap, cJSON *log) {
+  static const struct {
+    int hz;
+    pixformat_t pf;
+    const char *name;
+  } T[] = {{20000000, PIXFORMAT_JPEG, "JPEG, 20 MHz clock"},
+           {10000000, PIXFORMAT_JPEG, "JPEG, 10 MHz clock"},
+           {20000000, PIXFORMAT_RGB565, "RGB565, 20 MHz clock"},
+           {10000000, PIXFORMAT_RGB565, "RGB565, 10 MHz clock"}};
+  esp_err_t e = ESP_FAIL;
+  for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+    camera_config_t c;
+    cam_config(&c, fs, T[i].hz, T[i].pf);
+    e = esp_camera_init(&c);
+    if (log) {
+      char m[96];
+      snprintf(m, sizeof(m), "%s: %s", T[i].name, e == ESP_OK ? "started" : esp_err_to_name(e));
+      cJSON_AddItemToArray(log, cJSON_CreateString(m));
+    }
+    devlog("camera: init %s -> %s", T[i].name, esp_err_to_name(e));
+    if (e == ESP_OK) {
+      snprintf(how, hcap, "%s", T[i].name);
+      return ESP_OK;
+    }
+    esp_camera_deinit();
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
-  sensor_t *s = esp_camera_sensor_get();
-  const camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
-  char name[48];
-  snprintf(name, sizeof(name), "%s (PID 0x%04x)", info ? info->name : "unknown", s ? s->id.PID : 0);
+  return e;
+}
+
+// Takes one picture as JPEG (converting raw frames). Caller frees *jpg.
+static bool cam_grab(uint8_t **jpg, size_t *len, int *w, int *h) {
   camera_fb_t *fb = NULL;
   for (int i = 0; i < 4; i++) {  // let exposure settle
     if (fb) esp_camera_fb_return(fb);
     fb = esp_camera_fb_get();
   }
-  esp_err_t out;
-  if (!fb) {
-    char m[120];
-    snprintf(m, sizeof(m), "camera: sensor %s found but no frame captured", name);
-    out = send_json(req, result(false, m));
+  if (!fb) return false;
+  bool ok;
+  *w = fb->width, *h = fb->height;
+  if (fb->format == PIXFORMAT_JPEG) {
+    *jpg = heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ok = *jpg != NULL;
+    if (ok) memcpy(*jpg, fb->buf, fb->len), *len = fb->len;
   } else {
-    devlog("debug: PASS camera %s, %ux%u JPEG %u bytes", name, fb->width, fb->height, (unsigned)fb->len);
-    httpd_resp_set_type(req, "image/jpeg");
-    httpd_resp_set_hdr(req, "X-Camera", name);
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    out = httpd_resp_send(req, (const char *)fb->buf, (ssize_t)fb->len);
-    esp_camera_fb_return(fb);
+    ok = frame2jpg(fb, 80, jpg, len);
   }
+  esp_camera_fb_return(fb);
+  return ok;
+}
+
+static esp_err_t h_camera(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char sz[8];
+  query(req, "size", sz, sizeof(sz));
+  framesize_t fs = !strcmp(sz, "uxga") ? FRAMESIZE_UXGA : !strcmp(sz, "vga") ? FRAMESIZE_VGA : FRAMESIZE_SVGA;
+  battery_suspend();  // the camera's control bus shares GPIO15/16 with the battery gauge
+  char how[48] = "";
+  esp_err_t e = cam_start(fs, how, sizeof(how), NULL);
+  if (e != ESP_OK) {
+    battery_resume();
+    char m[200];
+    snprintf(m, sizeof(m), "camera: could not start (%s). Press \"Diagnose camera\" to find out whether it is the hardware.",
+             esp_err_to_name(e));
+    return send_json(req, result(false, m));
+  }
+  sensor_t *s = esp_camera_sensor_get();
+  const camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
+  char name[96];
+  snprintf(name, sizeof(name), "%s (PID 0x%04x), %s", info ? info->name : "unknown", s ? s->id.PID : 0, how);
+  uint8_t *jpg = NULL;
+  size_t len = 0;
+  int w = 0, hgt = 0;
+  bool ok = cam_grab(&jpg, &len, &w, &hgt);
   esp_camera_deinit();
   battery_resume();
+  if (!ok) {
+    char m[160];
+    snprintf(m, sizeof(m), "camera: sensor %s started but no picture arrived. Press \"Diagnose camera\".", name);
+    return send_json(req, result(false, m));
+  }
+  devlog("debug: PASS camera %s, %dx%d JPEG %u bytes", name, w, hgt, (unsigned)len);
+  httpd_resp_set_type(req, "image/jpeg");
+  httpd_resp_set_hdr(req, "X-Camera", name);
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  esp_err_t out = httpd_resp_send(req, (const char *)jpg, (ssize_t)len);
+  free(jpg);
   return out;
+}
+
+// --- camera diagnosis ---
+
+static const char *sensor_at(int addr) {
+  switch (addr) {
+    case 0x21: return "OV7670 / OV7725 / GC0308 / GC032A";
+    case 0x30: return "OV2640 / SC031GS";
+    case 0x3C: return "OV3660 / OV5640 / GC2145";
+    case 0x24: return "HM0360 / HM1055";
+    case 0x68: return "SC030IOT / SC101IOT";
+    case 0x6E: return "BF3005 / BF20A6";
+    case 0x36: return "MAX17048 battery gauge (not the camera)";
+    default: return "unknown device";
+  }
+}
+
+// Lists the I2C/SCCB addresses that answer on GPIO15/16. Returns how many
+// look like a camera sensor; the list goes into `out`.
+static int sccb_scan(char *out, size_t cap) {
+  out[0] = 0;
+  i2c_master_bus_handle_t bus = NULL;
+  i2c_master_bus_config_t bc = {.i2c_port = -1, .sda_io_num = CAM_SDA, .scl_io_num = CAM_SCL,
+                                .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,
+                                .flags.enable_internal_pullup = true};
+  if (i2c_new_master_bus(&bc, &bus) != ESP_OK) {
+    snprintf(out, cap, "could not open the bus");
+    return 0;
+  }
+  int cams = 0;
+  size_t o = 0;
+  for (int a = 0x08; a < 0x78; a++) {
+    if (i2c_master_probe(bus, (uint16_t)a, 20) != ESP_OK) continue;
+    o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s0x%02X %s", o ? "; " : "", a, sensor_at(a));
+    if (a != 0x36) cams++;
+  }
+  i2c_del_master_bus(bus);
+  if (!out[0]) snprintf(out, cap, "nothing answers");
+  return cams;
+}
+
+static void xclk(bool on) {
+  if (on) {
+    ledc_timer_config_t t = {.speed_mode = LEDC_LOW_SPEED_MODE, .duty_resolution = LEDC_TIMER_1_BIT,
+                             .timer_num = LEDC_TIMER_1, .freq_hz = 20000000, .clk_cfg = LEDC_AUTO_CLK};
+    ledc_channel_config_t ch = {.gpio_num = CAM_XCLK, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1,
+                                .timer_sel = LEDC_TIMER_1, .duty = 1, .hpoint = 0};
+    ledc_timer_config(&t);
+    ledc_channel_config(&ch);
+  } else {
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+    gpio_reset_pin(CAM_XCLK);
+  }
+}
+
+// Reads a line with the chip's own pull resistors off: high means something
+// on the board pulls it up.
+static int idle_level(int pin) {
+  gpio_reset_pin(pin);
+  gpio_set_direction(pin, GPIO_MODE_INPUT);
+  gpio_set_pull_mode(pin, GPIO_FLOATING);
+  esp_rom_delay_us(200);
+  int hi = 0;
+  for (int i = 0; i < 20; i++) hi += gpio_get_level(pin);
+  gpio_reset_pin(pin);
+  return hi >= 18 ? 1 : hi <= 2 ? 0 : -1;  // -1 = floating / noisy
+}
+
+// Counts level changes on a pin for `ms` (fast signals alias, but any change shows activity).
+static int activity(int pin, int ms) {
+  int changes = 0, last = gpio_get_level(pin);
+  int64_t end = esp_timer_get_time() + ms * 1000;
+  while (esp_timer_get_time() < end) {
+    int v = gpio_get_level(pin);
+    if (v != last) changes++, last = v;
+  }
+  return changes;
+}
+
+static void step(cJSON *arr, const char *name, int ok, const char *detail) {
+  cJSON *o = cJSON_CreateObject();
+  cJSON_AddStringToObject(o, "step", name);
+  cJSON_AddStringToObject(o, "result", ok > 0 ? "pass" : ok == 0 ? "fail" : "info");
+  cJSON_AddStringToObject(o, "detail", detail);
+  cJSON_AddItemToArray(arr, o);
+  devlog("camera diag: %s: %s - %s", name, ok > 0 ? "pass" : ok == 0 ? "FAIL" : "info", detail);
+}
+
+static esp_err_t h_camdiag(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  cJSON *o = cJSON_CreateObject();
+  cJSON *st = cJSON_AddArrayToObject(o, "steps");
+  char d[240];
+  const char *verdict = "", *kind = "";
+
+  size_t ps = esp_psram_get_size();
+  snprintf(d, sizeof(d), "%u MB (picture buffers live here)", (unsigned)(ps >> 20));
+  step(st, "PSRAM", ps > 0, d);
+
+  battery_suspend();
+  int sda = idle_level(CAM_SDA), scl = idle_level(CAM_SCL);
+  bool pulled = sda == 1 && scl == 1;
+  snprintf(d, sizeof(d), "SDA %s, SCL %s. The camera bus pull-ups are fed by the camera power rail, so both high usually means the camera is powered.",
+           sda == 1 ? "high" : sda == 0 ? "low" : "floating", scl == 1 ? "high" : scl == 0 ? "low" : "floating");
+  step(st, "Camera bus idle levels (GPIO15/16)", pulled ? 1 : 0, d);
+
+  char found[200];
+  int cams = sccb_scan(found, sizeof(found));
+  step(st, "Who answers on the camera bus, clock off", -1, found);
+  xclk(true);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  int cams_clk = sccb_scan(found, sizeof(found));
+  xclk(false);
+  step(st, "Who answers with the 20 MHz camera clock on (GPIO39)", cams_clk > 0 ? 1 : 0, found);
+  cams = cams > cams_clk ? cams : cams_clk;
+
+  cJSON *tries = cJSON_CreateArray();
+  char how[48] = "";
+  esp_err_t e = cam_start(FRAMESIZE_VGA, how, sizeof(how), tries);
+  char *tj = cJSON_PrintUnformatted(tries);
+  cJSON_Delete(tries);
+  step(st, "Camera driver start", e == ESP_OK, tj ? tj : "");
+  free(tj);
+  bool frame = false;
+  if (e == ESP_OK) {
+    sensor_t *s = esp_camera_sensor_get();
+    const camera_sensor_info_t *info = s ? esp_camera_sensor_get_info(&s->id) : NULL;
+    snprintf(d, sizeof(d), "%s, PID 0x%04x, %s", info ? info->name : "unknown", s ? s->id.PID : 0, how);
+    step(st, "Sensor", 1, d);
+    int v = activity(CAM_VSYNC, 300), hr = activity(CAM_HREF, 100), pc = activity(CAM_PCLK, 20);
+    snprintf(d, sizeof(d), "changes seen: VSYNC %d, HREF %d, PCLK %d", v, hr, pc);
+    step(st, "Picture signals from the sensor", v > 0 && pc > 0, d);
+    uint8_t *jpg = NULL;
+    size_t len = 0;
+    int w = 0, hgt = 0;
+    frame = cam_grab(&jpg, &len, &w, &hgt);
+    free(jpg);
+    snprintf(d, sizeof(d), frame ? "%dx%d, %u bytes as JPEG" : "no frame within the timeout", w, hgt, (unsigned)len);
+    step(st, "Picture", frame, d);
+    if (!frame)
+      verdict = v == 0 ? "The sensor answers and accepts its settings but sends no picture signals. Most likely the ribbon cable is not fully seated (control lines work, data lines do not) or the module is faulty."
+                       : "Picture signals arrive but no frame is assembled. This points to firmware timing; send a report.",
+      kind = v == 0 ? "hardware (likely)" : "firmware";
+    esp_camera_deinit();
+  }
+  battery_resume();
+
+  if (frame) verdict = "The camera works.", kind = "none";
+  else if (e != ESP_OK && cams > 0)
+    verdict = "A sensor answers on the bus but the driver could not start it. This is a firmware or compatibility problem, not wiring; send a report so the sensor type can be supported.",
+    kind = "firmware";
+  else if (e != ESP_OK && !pulled)
+    verdict = "The camera bus has no pull-up voltage and nothing answers: the camera connector is not powered. Check the Camera DIP switch is ON (switches off then on again), and that the camera module is plugged in.",
+    kind = "hardware";
+  else if (e != ESP_OK)
+    verdict = "The camera connector looks powered but no sensor answers. Most likely the ribbon cable is not fully inserted and locked, is inserted upside down (contacts must face the connector's contacts), or the camera module is faulty.",
+    kind = "hardware";
+  cJSON_AddStringToObject(o, "verdict", verdict);
+  cJSON_AddStringToObject(o, "kind", kind);
+  devlog("camera diag: verdict (%s) %s", kind, verdict);
+  return send_json(req, o);
 }
 
 // ---------- TF card ----------
@@ -240,7 +468,7 @@ void debug_register(httpd_handle_t h, esp_err_t (*auth_gate)(httpd_req_t *)) {
     const char *uri;
     esp_err_t (*fn)(httpd_req_t *);
   } r[] = {{"/api/debug/camera", h_camera}, {"/api/debug/sd", h_sd},     {"/api/debug/mem", h_mem},
-           {"/api/debug/temp", h_temp},     {"/api/debug/led", h_led},   {"/api/debug/button", h_button}};
+           {"/api/debug/temp", h_temp},     {"/api/debug/led", h_led},   {"/api/debug/button", h_button}, {"/api/debug/camdiag", h_camdiag}};
   for (size_t i = 0; i < sizeof(r) / sizeof(r[0]); i++) {
     httpd_uri_t u = {.uri = r[i].uri, .method = HTTP_GET, .handler = r[i].fn};
     httpd_register_uri_handler(h, &u);

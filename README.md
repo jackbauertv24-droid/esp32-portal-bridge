@@ -7,7 +7,7 @@ with the SIM in its own modem, and **every SMS the SIM receives is saved and
 forwarded** to you.
 
 Everything is set from the admin page: join the board's hotspot and open
-`http://192.168.0.1`. Nothing about a venue, carrier or person is built into the
+`http://10.88.88.1` (or `http://portalbridge.local`). Nothing about a venue, carrier or person is built into the
 firmware.
 
 Builds run on GitHub Actions (ESP-IDF 5.5); nothing is installed on a PC.
@@ -48,7 +48,7 @@ both route positions (read from the schematic; the first flash confirms it).
 |---|---|---|
 | 4G | **ON** | powers the modem (SMS, 4G data) |
 | USB hub | **ON** | the Type-C port reaches the USB-to-UART chip through it (flashing, serial log) |
-| Camera | OFF | not used by this firmware; saves power |
+| Camera | ON to use the camera, else OFF | powers the camera connector; Debug › Diagnose camera checks it |
 | USB route (labelled only ON/OFF) | **OFF** = modem USB ↔ ESP32 | the firmware takes 4G data over this link; in the ON position (modem USB ↔ Type-C) a PC gets the modem instead and the board has no 4G data |
 
 Insert the SIM and attach the LTE antenna.
@@ -68,7 +68,7 @@ Later versions: admin app → **Tools → Firmware update** → the `-ota.bin` f
 ## First setup
 
 1. Join Wi-Fi **PortalBridge-XXXX**, password `portalbridge`.
-2. Open `http://192.168.0.1`, log in as `admin` / `portalbridge`.
+2. Open `http://10.88.88.1` (or `http://portalbridge.local`), log in as `admin` / `portalbridge`.
 3. Set your own admin password, hotspot name and hotspot password. The board
    restarts; reconnect with the new values.
 4. **Settings**:
@@ -79,6 +79,18 @@ Later versions: admin app → **Tools → Firmware update** → the `-ota.bin` f
      **Find my Telegram chat id**, save, **Test Telegram**.
    - *Reports*: a GitHub fine-grained token with *Issues: read and write* on this
      repository, so **Tools → Send to GitHub issue** works.
+
+## Can't reach the admin page?
+
+- Firmware v0.11.0 and later: `http://10.88.88.1`, or `http://portalbridge.local` on any address.
+  A board still on the old default 192.168.0.1 moves to 10.88.88.1 once, on its first start
+  after the update.
+- If the upstream Wi-Fi uses the same range, the board moves to the first free one of
+  10.88.88.1, 172.31.88.1, 192.168.233.1, 10.42.0.1, disconnects hotspot devices so they get
+  a fresh address, and sends an alert through your forwarding channels with the new address.
+- Firmware before v0.11.0 moved to `http://10.42.0.1` (or `http://192.168.77.1`) but kept
+  devices on their old address: forget the hotspot on your phone, join again, then open it.
+  Typing the old address then reaches the venue's own router instead.
 
 ## LED
 

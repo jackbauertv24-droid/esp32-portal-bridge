@@ -20,6 +20,8 @@
 #include "lb.h"
 #include "meter.h"
 #include "lte.h"
+#include "mdns.h"
+#include "nvs.h"
 #include "settings.h"
 #include "urlutil.h"
 
@@ -51,6 +53,12 @@ static void apply_ap_ip(const char *ip) {
   esp_netif_napt_enable(ap_if);
   snprintf(ap_ip, sizeof(ap_ip), "%s", ip);
   napt_on = 1;
+}
+
+// Do the hotspot's /24 and the upstream network share addresses?
+static bool overlaps(uint32_t ap_addr, uint32_t up_addr, uint32_t up_mask) {
+  uint32_t m = 0x00FFFFFF & up_mask;  // network byte order: the wider (smaller) mask wins
+  return ((ap_addr ^ up_addr) & m) == 0;
 }
 
 // Hands the uplink's DNS server to hotspot clients via DHCP.
@@ -118,13 +126,25 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
     snprintf(sta_ip, sizeof(sta_ip), IPSTR, IP2STR(&e->ip_info.ip));
     sta_has_ip = true;
     event_post("Joined upstream Wi-Fi \"%s\" as %s", sta_ssid, sta_ip);
-    // Move the hotspot if the upstream network uses the same /24.
+    // Move the hotspot if its /24 overlaps the upstream network (using the
+    // wider of the two masks), to the first spare address that does not.
     esp_ip4_addr_t a;
     esp_netif_str_to_ip4(ap_ip, &a);
-    if ((a.addr & 0x00FFFFFF) == (e->ip_info.ip.addr & 0x00FFFFFF)) {
-      const char *alt = strncmp(ap_ip, "10.42.", 6) ? "10.42.0.1" : "192.168.77.1";
-      event_post("Upstream network uses %s too; admin address moved to %s", ap_ip, alt);
-      apply_ap_ip(alt);
+    if (overlaps(a.addr, e->ip_info.ip.addr, e->ip_info.netmask.addr)) {
+      static const char *const ALT[] = {"10.88.88.1", "172.31.88.1", "192.168.233.1", "10.42.0.1"};
+      const char *alt = NULL;
+      for (size_t i = 0; i < sizeof(ALT) / sizeof(ALT[0]) && !alt; i++) {
+        esp_ip4_addr_t c;
+        esp_netif_str_to_ip4(ALT[i], &c);
+        if (strcmp(ALT[i], ap_ip) && !overlaps(c.addr, e->ip_info.ip.addr, e->ip_info.netmask.addr)) alt = ALT[i];
+      }
+      if (alt) {
+        event_post("Upstream network uses %s too; admin page moved to http://%s/ (also http://portalbridge.local/). "
+                   "Devices on the hotspot reconnect to get the new address.", ap_ip, alt);
+        apply_ap_ip(alt);
+        // Devices keep their old address until they reconnect; make them.
+        esp_wifi_deauth_sta(0);
+      }
     }
     recheck_now = true;
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
@@ -327,7 +347,29 @@ void netmgr_start(void) {
 
   char ip[16];
   cfg_get("ap_ip", ip, sizeof(ip));
+  // One-time move off the old default 192.168.0.1, which venue routers often use.
+  nvs_handle_t nh;
+  if (nvs_open("mig", NVS_READWRITE, &nh) == ESP_OK) {
+    uint8_t done = 0;
+    if (nvs_get_u8(nh, "apip1", &done) != ESP_OK && !strcmp(ip, "192.168.0.1")) {
+      char err[60];
+      if (cfg_set("ap_ip", "10.88.88.1", err, sizeof(err)) == ESP_OK && cfg_commit() == ESP_OK) {
+        snprintf(ip, sizeof(ip), "10.88.88.1");
+        event_post("Admin page moved from the old default 192.168.0.1 to http://10.88.88.1/ (also http://portalbridge.local/)");
+      }
+    }
+    nvs_set_u8(nh, "apip1", 1);
+    nvs_commit(nh);
+    nvs_close(nh);
+  }
   apply_ap_ip(ip);
+  // http://portalbridge.local/ on the hotspot, whatever the address (mDNS;
+  // not announced on the upstream network, see sdkconfig.defaults).
+  if (mdns_init() == ESP_OK) {
+    mdns_hostname_set("portalbridge");
+    mdns_instance_name_set("Portal Bridge admin");
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+  }
   devlog("hotspot: \"%s\" on channel %d, admin at http://%s/", ssid, ac.ap.channel, ap_ip);
   xTaskCreatePinnedToCore(net_task, "netmgr", 16384, NULL, 4, NULL, 1);
 }
