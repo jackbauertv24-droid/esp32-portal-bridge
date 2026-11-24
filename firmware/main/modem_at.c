@@ -545,3 +545,87 @@ void modem_summary(char *out, size_t cap) {
            st.own_number, st.urc_count, st.cmti_count, st.stored_count, st.sim_deleted);
   xSemaphoreGive(lock);
 }
+
+// ---------- sending ----------
+
+// Waits for the "> " prompt of AT+CMGS; false on ERROR or timeout.
+static bool wait_prompt(int timeout_ms) {
+  int64_t until = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+  char seen[64];
+  size_t n = 0;
+  while (esp_timer_get_time() < until) {
+    uint8_t c;
+    if (uart_read_bytes(UART, &c, 1, pdMS_TO_TICKS(20)) != 1) continue;
+    if (c == '>') return true;
+    if (n < sizeof(seen) - 1) seen[n++] = (char)c;
+    seen[n] = 0;
+    if (strstr(seen, "ERROR")) return false;
+  }
+  return false;
+}
+
+int modem_send_sms(const char *to, const char *text, char *err, size_t errcap) {
+  static uint8_t ref;
+  if (errcap) err[0] = 0;
+  sms_submit_part_t *parts = malloc(sizeof(sms_submit_part_t) * SMS_SUBMIT_MAX_PARTS);
+  if (!parts) {
+    snprintf(err, errcap, "out of memory");
+    return -1;
+  }
+  int n = sms_pdu_encode_submit(to, text, ++ref, parts, SMS_SUBMIT_MAX_PARTS);
+  if (n < 0) {
+    snprintf(err, errcap, n == -1 ? "invalid phone number" : n == -2 ? "message too long (max 8 parts)" : "invalid text");
+    free(parts);
+    return n;
+  }
+  xSemaphoreTake(lock, portMAX_DELAY);
+  int sent = 0;
+  if (!st.alive) {
+    snprintf(err, errcap, "modem not answering");
+    goto done;
+  }
+  cmd_quiet("AT+CMGF=0", 2000);
+  for (int i = 0; i < n; i++) {
+    char line[256], c[24];
+    while (read_line(line, sizeof(line), 0)) handle_urc(line);
+    snprintf(c, sizeof(c), "AT+CMGS=%d", parts[i].tpdu_len);
+    devlog("AT> %s (part %d/%d)", c, i + 1, n);
+    uart_write_bytes(UART, c, strlen(c));
+    uart_write_bytes(UART, "\r", 1);
+    if (!wait_prompt(10000)) {
+      snprintf(err, errcap, "modem refused to send (no prompt) at part %d/%d", i + 1, n);
+      uart_write_bytes(UART, "\x1B", 1);  // cancel
+      goto done;
+    }
+    uart_write_bytes(UART, parts[i].hex, strlen(parts[i].hex));
+    uart_write_bytes(UART, "\x1A", 1);
+    bool ok = false, fin = false;
+    int64_t until = esp_timer_get_time() + 60LL * 1000000;
+    while (!fin && esp_timer_get_time() < until) {
+      if (!read_line(line, sizeof(line), 100)) continue;
+      if (looks_like_pdu(line)) continue;  // echo of the PDU
+      log_line("AT<", line);
+      if (!strncmp(line, "+CMGS:", 6)) ok = true;
+      else {
+        bool fok = false;
+        if (is_final(line, &fok)) {
+          if (!fok) {
+            snprintf(err, errcap, "network rejected part %d/%d: %s", i + 1, n, line);
+            ok = false;
+          }
+          fin = true;
+        }
+      }
+    }
+    if (!ok) {
+      if (!err[0]) snprintf(err, errcap, "no confirmation from the network for part %d/%d", i + 1, n);
+      goto done;
+    }
+    sent++;
+  }
+done:
+  xSemaphoreGive(lock);
+  free(parts);
+  devlog("sms: sent %d of %d part(s) to %s", sent, n, to);
+  return sent == n ? n : -1;
+}

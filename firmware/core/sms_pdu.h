@@ -39,6 +39,22 @@ int sms_pdu_decode(const char *hex, sms_t *out);
 // Short human-readable reason for a negative return value.
 const char *sms_pdu_error(int code);
 
+// ---------- sending (SMS-SUBMIT) ----------
+
+#define SMS_SUBMIT_MAX_PARTS 8
+
+typedef struct {
+  char hex[400];  // PDU with an empty SMSC field ("00"), ready for AT+CMGS
+  int tpdu_len;   // octets after the SMSC field, the length AT+CMGS expects
+} sms_submit_part_t;
+
+// Encodes UTF-8 `text` to `dest` ("+85291234567" or a local number). Uses the
+// GSM 7-bit alphabet when every character fits, otherwise UCS2; long texts are
+// split into concatenated parts with reference `ref`. Returns the number of
+// parts, or a negative error (-1 bad number, -2 text too long, -3 bad UTF-8).
+int sms_pdu_encode_submit(const char *dest, const char *text, unsigned char ref, sms_submit_part_t *parts,
+                          int max_parts);
+
 #ifdef __cplusplus
 }
 #endif

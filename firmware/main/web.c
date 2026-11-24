@@ -234,8 +234,75 @@ static esp_err_t h_sms(httpd_req_t *req) {
   char l[8];
   query(req, "limit", l, sizeof(l));
   int limit = atoi(l);
-  if (limit <= 0 || limit > 500) limit = 100;
-  return send_json(req, smsstore_list_json(limit));
+  if (limit <= 0 || limit > 1000) limit = 300;
+  char box[8];
+  query(req, "box", box, sizeof(box));
+  return send_json(req, !strcmp(box, "out") ? smsstore_list_sent_json(limit) : smsstore_list_json(limit));
+}
+
+static esp_err_t h_sms_send(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 8192);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *to = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "to")) : NULL;
+  const char *text = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "text")) : NULL;
+  if (!to || !to[0] || !text || !text[0]) {
+    cJSON_Delete(o);
+    return send_result(req, false, "Enter a number and a message.");
+  }
+  char err[160] = "";
+  int parts = modem_send_sms(to, text, err, sizeof(err));
+  smsstore_add_sent(to, text, parts > 0 ? parts : 0, parts > 0, err);
+  cJSON_Delete(o);
+  char msg[200];
+  if (parts > 0) snprintf(msg, sizeof(msg), "Sent (%d part%s).", parts, parts > 1 ? "s" : "");
+  else snprintf(msg, sizeof(msg), "Not sent: %s", err);
+  return send_result(req, parts > 0, msg);
+}
+
+static esp_err_t h_sms_delete(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 16384);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *box = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "box")) : NULL;
+  cJSON *ids = o ? cJSON_GetObjectItem(o, "ids") : NULL;
+  int n = cJSON_GetArraySize(ids);
+  if (!box || n <= 0) {
+    cJSON_Delete(o);
+    return send_result(req, false, "nothing selected");
+  }
+  uint32_t *v = calloc((size_t)n, sizeof(uint32_t));
+  for (int i = 0; i < n; i++) v[i] = (uint32_t)cJSON_GetNumberValue(cJSON_GetArrayItem(ids, i));
+  int removed = smsstore_delete(box, v, n);
+  free(v);
+  cJSON_Delete(o);
+  char msg[60];
+  snprintf(msg, sizeof(msg), "Deleted %d message%s.", removed, removed == 1 ? "" : "s");
+  return send_result(req, removed > 0, msg);
+}
+
+static esp_err_t h_sms_seen(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char id[16];
+  query(req, "id", id, sizeof(id));
+  smsstore_set_seen((uint32_t)strtoul(id, NULL, 10));
+  return send_result(req, true, "ok");
+}
+
+static esp_err_t h_sms_export(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  cJSON *o = cJSON_CreateObject();
+  cJSON_AddItemToObject(o, "inbox", smsstore_list_json(5000));
+  cJSON_AddItemToObject(o, "sent", smsstore_list_sent_json(5000));
+  char *s = cJSON_Print(o);
+  cJSON_Delete(o);
+  httpd_resp_set_type(req, "application/json; charset=utf-8");
+  httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"portal-bridge-sms.json\"");
+  esp_err_t e = send_text_chunked(req, s ? s : "{}", NULL);
+  free(s);
+  return e;
 }
 
 static esp_err_t h_at(httpd_req_t *req) {
@@ -519,6 +586,10 @@ void web_start(void) {
       {"/api/settings/export", HTTP_GET, h_export},
       {"/api/settings/reset", HTTP_POST, h_reset},
       {"/api/sms", HTTP_GET, h_sms},
+      {"/api/sms/send", HTTP_POST, h_sms_send},
+      {"/api/sms/delete", HTTP_POST, h_sms_delete},
+      {"/api/sms/seen", HTTP_POST, h_sms_seen},
+      {"/api/sms/export", HTTP_GET, h_sms_export},
       {"/api/at", HTTP_POST, h_at},
       {"/api/log", HTTP_GET, h_log},
       {"/api/report", HTTP_GET, h_report},

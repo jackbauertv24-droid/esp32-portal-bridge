@@ -24,6 +24,9 @@ jobs:
           FLAGS="-Wall -Wextra -Werror -std=c11 -g -fsanitize=address,undefined -I firmware/core"
           gcc $FLAGS tests/test_sms_pdu.c firmware/core/sms_pdu.c -o t_pdu && ./t_pdu
           gcc $FLAGS tests/test_core.c firmware/core/textutil.c firmware/core/urlutil.c firmware/core/html_form.c -o t_core && ./t_core
+          gcc $FLAGS tests/test_submit.c firmware/core/sms_pdu.c -o t_submit
+          npm install --no-save --silent node-pdu@2.1.2
+          ./t_submit | node tests/verify_submit.mjs
 
   firmware:
     runs-on: ubuntu-24.04

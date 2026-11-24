@@ -19,3 +19,7 @@ void modem_own_number(char *out, size_t cap);
 void modem_status_json(cJSON *root);
 // Short summary for the report.
 void modem_summary(char *out, size_t cap);
+
+// Sends an SMS (split into parts if long). Returns the number of parts sent,
+// or a negative value with the reason in `err`.
+int modem_send_sms(const char *to, const char *text, char *err, size_t errcap);

@@ -250,3 +250,178 @@ int sms_pdu_decode(const char *hex, sms_t *out) {
   return 0;
 #undef NEED
 }
+
+// ---------- SMS-SUBMIT encoder ----------
+
+// Maps a code point to the GSM 7-bit alphabet: returns the septet, with 0x100
+// set when it needs the 0x1B escape, or -1 if it is not representable.
+static int gsm7_of(uint32_t cp) {
+  for (int i = 0; i < 128; i++)
+    if (GSM7_BASIC[i] == cp) return i;
+  static const uint8_t ext[] = {0x0A, 0x14, 0x28, 0x29, 0x2F, 0x3C, 0x3D, 0x3E, 0x40, 0x65};
+  for (size_t i = 0; i < sizeof(ext); i++)
+    if (gsm7_ext(ext[i]) == cp) return 0x100 | ext[i];
+  return -1;
+}
+
+// UTF-8 -> code points. Returns the count or -3 on malformed input.
+static int utf8_decode(const char *s, uint32_t *out, int cap) {
+  int n = 0;
+  const unsigned char *p = (const unsigned char *)s;
+  while (*p) {
+    uint32_t cp;
+    int extra;
+    if (*p < 0x80) cp = *p, extra = 0;
+    else if ((*p & 0xE0) == 0xC0) cp = *p & 0x1F, extra = 1;
+    else if ((*p & 0xF0) == 0xE0) cp = *p & 0x0F, extra = 2;
+    else if ((*p & 0xF8) == 0xF0) cp = *p & 0x07, extra = 3;
+    else return -3;
+    p++;
+    for (int k = 0; k < extra; k++, p++) {
+      if ((*p & 0xC0) != 0x80) return -3;
+      cp = (cp << 6) | (*p & 0x3F);
+    }
+    if (n >= cap) return -2;
+    out[n++] = cp;
+  }
+  return n;
+}
+
+static void hex_put(char *out, size_t *o, const uint8_t *b, size_t n) {
+  static const char HX[] = "0123456789ABCDEF";
+  for (size_t i = 0; i < n; i++) {
+    out[(*o)++] = HX[b[i] >> 4];
+    out[(*o)++] = HX[b[i] & 15];
+  }
+  out[*o] = 0;
+}
+
+// Destination address field: length (digits), type, swapped BCD.
+static int encode_address(const char *dest, uint8_t *out) {
+  char d[24];
+  int n = 0, intl = 0;
+  for (const char *p = dest; *p; p++) {
+    if (*p == '+' && n == 0) intl = 1;
+    else if (*p >= '0' && *p <= '9') {
+      if (n >= 20) return -1;
+      d[n++] = *p;
+    } else if (*p != ' ' && *p != '-' && *p != '(' && *p != ')') return -1;
+  }
+  if (n < 3) return -1;
+  int k = 0;
+  out[k++] = (uint8_t)n;
+  out[k++] = intl ? 0x91 : 0x81;
+  for (int i = 0; i < n; i += 2) {
+    uint8_t lo = (uint8_t)(d[i] - '0');
+    uint8_t hi = (i + 1 < n) ? (uint8_t)(d[i + 1] - '0') : 0x0F;
+    out[k++] = (uint8_t)(hi << 4 | lo);
+  }
+  return k;
+}
+
+int sms_pdu_encode_submit(const char *dest, const char *text, unsigned char ref, sms_submit_part_t *parts,
+                          int max_parts) {
+  static uint32_t cps[1200];
+  int ncp = utf8_decode(text, cps, 1200);
+  if (ncp < 0) return ncp;
+  uint8_t addr[16];
+  int al = encode_address(dest, addr);
+  if (al < 0) return -1;
+
+  // GSM 7-bit if possible.
+  static uint16_t sept[2400];
+  int ns = 0, gsm = 1;
+  for (int i = 0; i < ncp && gsm; i++) {
+    int g = gsm7_of(cps[i]);
+    if (g < 0) gsm = 0;
+    else if (g & 0x100) {
+      sept[ns++] = 0x1B;
+      sept[ns++] = (uint16_t)(g & 0x7F);
+    } else sept[ns++] = (uint16_t)g;
+  }
+  // UCS2 code units otherwise.
+  static uint16_t units[2400];
+  int nu = 0;
+  if (!gsm)
+    for (int i = 0; i < ncp; i++) {
+      if (cps[i] >= 0x10000) {
+        uint32_t v = cps[i] - 0x10000;
+        units[nu++] = (uint16_t)(0xD800 | (v >> 10));
+        units[nu++] = (uint16_t)(0xDC00 | (v & 0x3FF));
+      } else units[nu++] = (uint16_t)cps[i];
+    }
+
+  int total_len = gsm ? ns : nu;
+  int single = gsm ? 160 : 70, per = gsm ? 153 : 67;
+  int nparts;
+  int starts[SMS_SUBMIT_MAX_PARTS + 1];
+  if (total_len <= single) {
+    nparts = 1;
+    starts[0] = 0;
+    starts[1] = total_len;
+  } else {
+    nparts = 0;
+    int pos = 0;
+    while (pos < total_len) {
+      if (nparts >= max_parts || nparts >= SMS_SUBMIT_MAX_PARTS) return -2;
+      int end = pos + per < total_len ? pos + per : total_len;
+      // Never split an escape pair or a surrogate pair.
+      if (end < total_len) {
+        if (gsm && sept[end - 1] == 0x1B) end--;
+        if (!gsm && units[end - 1] >= 0xD800 && units[end - 1] <= 0xDBFF) end--;
+      }
+      starts[nparts++] = pos;
+      pos = end;
+    }
+    starts[nparts] = total_len;
+  }
+  if (nparts > max_parts) return -2;
+
+  for (int p = 0; p < nparts; p++) {
+    uint8_t b[200];
+    int k = 0;
+    int udh = nparts > 1;
+    b[k++] = (uint8_t)(0x11 | (udh ? 0x40 : 0));  // SMS-SUBMIT, relative validity period
+    b[k++] = 0x00;                                 // message reference (set by the modem)
+    memcpy(b + k, addr, (size_t)al);
+    k += al;
+    b[k++] = 0x00;               // protocol identifier
+    b[k++] = gsm ? 0x00 : 0x08;  // data coding scheme
+    b[k++] = 0xAA;               // validity: 4 days
+    int a = starts[p], z = starts[p + 1];
+    uint8_t hdr[6] = {0x05, 0x00, 0x03, ref, (uint8_t)nparts, (uint8_t)(p + 1)};
+    if (gsm) {
+      int hdr_septets = udh ? 7 : 0;  // 6 header octets + 1 fill bit = 7 septets
+      int udl = hdr_septets + (z - a);
+      b[k++] = (uint8_t)udl;
+      int ud_bytes = (udl * 7 + 7) / 8;
+      uint8_t *ud = b + k;
+      memset(ud, 0, (size_t)ud_bytes);
+      if (udh) memcpy(ud, hdr, 6);
+      for (int i = a; i < z; i++) {
+        int bit = (hdr_septets + (i - a)) * 7;
+        int byte = bit / 8, sh = bit % 8;
+        ud[byte] |= (uint8_t)(sept[i] << sh);
+        if (sh > 1) ud[byte + 1] |= (uint8_t)(sept[i] >> (8 - sh));
+      }
+      k += ud_bytes;
+    } else {
+      int udl = (udh ? 6 : 0) + 2 * (z - a);
+      b[k++] = (uint8_t)udl;
+      if (udh) {
+        memcpy(b + k, hdr, 6);
+        k += 6;
+      }
+      for (int i = a; i < z; i++) {
+        b[k++] = (uint8_t)(units[i] >> 8);
+        b[k++] = (uint8_t)(units[i] & 0xFF);
+      }
+    }
+    size_t o = 0;
+    parts[p].hex[0] = 0;
+    hex_put(parts[p].hex, &o, (const uint8_t *)"\x00", 1);
+    hex_put(parts[p].hex, &o, b, (size_t)k);
+    parts[p].tpdu_len = k;
+  }
+  return nparts;
+}

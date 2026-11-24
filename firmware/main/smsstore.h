@@ -32,3 +32,15 @@ int smsstore_count(void);
 bool sms_wait_code(int64_t since_us, int timeout_s, char *code, size_t cap);
 // Checks whether `from`/`text` match the login-code rule; writes the code.
 bool sms_match_code(const char *from, const char *text, char *code, size_t cap);
+
+// ---------- SMS manager ----------
+
+// Records an outgoing message; returns its id (0 on failure).
+uint32_t smsstore_add_sent(const char *to, const char *text, int parts, bool ok, const char *error);
+cJSON *smsstore_list_sent_json(int limit);
+// Removes messages by id from the inbox ("in") or sent ("out") store.
+// Returns how many were removed.
+int smsstore_delete(const char *box, const uint32_t *ids, int n);
+// Unread tracking: everything with id > seen is unread.
+uint32_t smsstore_seen(void);
+void smsstore_set_seen(uint32_t id);

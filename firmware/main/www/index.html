@@ -109,10 +109,29 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
 
 <section id="p-sms" class="hidden">
   <div class="card">
-    <h2>Messages saved on the board</h2>
-    <p class="mut">Every SMS the SIM receives is saved here first, then removed from the SIM (if that setting is on), then forwarded.</p>
-    <div id="smslist">Loading…</div>
+    <div class="row">
+      <input id="sms_q" placeholder="Search number or text" style="flex:1;min-width:160px" oninput="renderSms()">
+      <select id="sms_f" style="width:auto" onchange="renderSms()">
+        <option value="all">All</option><option value="unread">Unread</option><option value="otp">Login codes</option>
+        <option value="out">Sent</option><option value="failed">Failed to send</option>
+      </select>
+    </div>
+    <button onclick="compose()">New message</button>
+    <button class="sec" onclick="loadSms()">Refresh</button>
+    <button class="sec" onclick="toggleSelect()" id="btn_sel">Select</button>
+    <button class="danger hidden" id="btn_del" onclick="delSelected()">Delete selected</button>
+    <button class="sec" onclick="location.href='/api/sms/export'">Export all</button>
+    <div class="msg" id="sms_msg"></div>
   </div>
+  <div class="card hidden" id="composer">
+    <h2>New message</h2>
+    <label>To</label><input id="c_to" inputmode="tel" placeholder="+85291234567 or 91234567">
+    <label>Message</label><textarea id="c_text" style="min-height:110px;font:inherit" oninput="countSms()"></textarea>
+    <div class="help" id="c_count"></div>
+    <button onclick="sendSms()">Send</button><button class="sec" onclick="$('composer').classList.add('hidden')">Cancel</button>
+    <div class="msg" id="c_msg"></div>
+  </div>
+  <div class="card" id="sms_view"><div id="smslist">Loading…</div></div>
 </section>
 
 <section id="p-settings" class="hidden">
@@ -213,7 +232,7 @@ async function tick(){
     $('t_board').innerHTML=row('Firmware',esc(b.fw+' ('+b.commit+', '+b.built+')'))+row('Up for',dur(b.uptime_s))+row('Last restart',esc(b.reset_reason),b.reset_reason.match(/crash|watchdog|brownout/)?'bad':'')
       +row('Battery',bt.found?(bt.volts||0).toFixed(2)+' V · '+Math.round(bt.percent||0)+' %':'gauge not found')
       +row('Memory free',b.heap_kb+' KB ('+b.internal_kb+' KB internal)')+row('Storage',b.storage_used_kb+' / '+b.storage_total_kb+' KB');
-    $('events').innerHTML=st.events.length?st.events.map(e=>'<div class="ev"><span class="mut">'+ago(e.t)+'</span> · '+esc(e.text)+'</div>').join(''):'none yet';
+    badge();$('events').innerHTML=st.events.length?st.events.map(e=>'<div class="ev"><span class="mut">'+ago(e.t)+'</span> · '+esc(e.text)+'</div>').join(''):'none yet';
   }catch(e){$('dot').style.background='var(--mut)'}
 }
 function renderPortal(){
@@ -232,11 +251,65 @@ async function doSetup(){
   msg('su_msg',r.message,r.ok?'ok':'bad');
 }
 
+let inbox=[],outbox=[],seen=0,thread=null,selecting=false,selected=new Set();
+const norm=n=>{const d=String(n||"").replace(/[^0-9+]/g,"");if(!st)return d;const cc="852";return d.startsWith("+"+cc)?d.slice(cc.length+1):(d.startsWith("00"+cc)?d.slice(cc.length+2):d)};
+const when=m=>m.rx>1600000000?new Date(m.rx*1000).toLocaleString():(m.sent||"");
 async function loadSms(){
-  try{const a=await (await api('/api/sms?limit=200')).json();
-  $('smslist').innerHTML=a.length?a.map(m=>'<div class="sms"><b>'+esc(m.from)+'</b>'+(m.otp?'<span class="tag">login code</span>':'')+(m.parts>1?'<span class="tag">'+m.parts+' parts</span>':'')
-    +'<br><span class="mut">'+esc(m.sent)+'</span><div>'+esc(m.text).replace(/\n/g,'<br>')+'</div></div>').join(''):'No messages yet.';}catch(e){}
+  try{[inbox,outbox]=await Promise.all([(await api("/api/sms?box=in&limit=1000")).json(),(await api("/api/sms?box=out&limit=1000")).json()]);
+  seen=st?st.board.sms_last_id-st.board.sms_unread:0;renderSms();
+  const max=inbox.reduce((a,m)=>Math.max(a,m.id),0);if(max>seen)jpost("/api/sms/seen?id="+max).then(()=>{if(st)st.board.sms_unread=0;badge()});}catch(e){}
 }
+function all(){return inbox.map(m=>({...m,box:"in",peer:m.from,key:"in"+m.id})).concat(outbox.map(m=>({...m,box:"out",peer:m.to,key:"out"+m.id})))}
+function match(m,q,f){
+  if(f=="unread"&&!(m.box=="in"&&m.id>seen))return false;if(f=="otp"&&!m.otp)return false;if(f=="out"&&m.box!="out")return false;
+  if(f=="failed"&&!(m.box=="out"&&!m.ok))return false;if(!q)return true;q=q.toLowerCase();
+  return String(m.peer).toLowerCase().includes(q)||String(m.text).toLowerCase().includes(q)}
+function bubble(m){
+  const sel=selecting?'<input type="checkbox" style="width:auto;margin-right:6px" '+(selected.has(m.key)?"checked ":"")+'onchange="sel(\x27'+m.key+'\x27,this.checked)">':"";
+  const code=(m.text.match(/(^|[^0-9])([0-9]{4,8})([^0-9]|$)/)||[])[2];
+  return '<div class="sms" style="'+(m.box=="out"?"text-align:right":"")+'">'+sel+'<span class="mut">'+(m.box=="out"?"You → "+esc(m.peer):esc(m.peer))+" · "+esc(when(m))+'</span>'
+   +(m.box=="in"&&m.id>seen?'<span class="tag">new</span>':"")+(m.otp?'<span class="tag">login code</span>':"")+(m.parts>1?'<span class="tag">'+m.parts+' parts</span>':"")
+   +(m.box=="out"&&!m.ok?'<span class="tag bad">not sent</span>':"")
+   +'<div style="white-space:pre-wrap;margin:3px 0">'+esc(m.text)+'</div>'+(m.error?'<div class="help bad">'+esc(m.error)+'</div>':"")
+   +'<div class="row" style="'+(m.box=="out"?"justify-content:flex-end":"")+'">'
+   +(code?'<button class="sec" onclick="copyText(\x27'+code+'\x27)">Copy '+code+'</button>':"")
+   +'<button class="sec" onclick="copyText('+esc(JSON.stringify(m.text))+')">Copy</button>'
+   +'<button class="sec" onclick="fwdSms(\x27'+m.key+'\x27)">Forward</button>'
+   +(m.box=="in"?'<button class="sec" onclick="compose(\x27'+esc(m.peer)+'\x27)">Reply</button>':"")
+   +'<button class="danger" onclick="delOne(\x27'+m.key+'\x27)">Delete</button></div></div>'}
+function renderSms(){
+  const q=$("sms_q").value.trim(),f=$("sms_f").value,list=all().filter(m=>match(m,q,f)).sort((a,b)=>(b.rx||0)-(a.rx||0)||b.id-a.id);
+  const el=$("smslist");
+  if(thread!==null){const t=all().filter(m=>norm(m.peer)==thread).sort((a,b)=>(a.rx||0)-(b.rx||0)||a.id-b.id);
+    el.innerHTML='<button class="sec" onclick="thread=null;renderSms()">← All conversations</button><h2 style="margin-top:12px">'+esc(thread)+'</h2>'
+      +(t.map(bubble).join("")||"No messages.")+'<label>Reply</label><textarea id="r_text" style="min-height:80px;font:inherit"></textarea><button onclick="reply()">Send reply</button><div class="msg" id="r_msg"></div>';return}
+  if(q||f!="all"){el.innerHTML=list.length?list.map(bubble).join(""):"Nothing matches.";return}
+  const conv={};list.forEach(m=>{const k=norm(m.peer);(conv[k]=conv[k]||[]).push(m)});
+  const keys=Object.keys(conv);
+  el.innerHTML=keys.length?keys.map(k=>{const ms=conv[k],last=ms[0],unread=ms.filter(m=>m.box=="in"&&m.id>seen).length;
+    return '<div class="sms" style="cursor:pointer" onclick="thread=\x27'+esc(k)+'\x27;renderSms()"><b>'+esc(last.peer)+'</b>'+(unread?'<span class="tag">'+unread+' new</span>':"")
+      +'<span class="tag">'+ms.length+'</span><br><span class="mut">'+esc(when(last))+'</span><div class="help" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(last.box=="out"?"You: ":"")+esc(last.text)+'</div></div>'}).join(""):"No messages yet."}
+function compose(to,text){$("composer").classList.remove("hidden");$("c_to").value=to||"";$("c_text").value=text||"";countSms();msg("c_msg","");$("composer").scrollIntoView();(to?$("c_text"):$("c_to")).focus()}
+function fwdSms(key){const m=all().find(x=>x.key==key);if(m)compose("",m.text)}
+const GSM="@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà",GSMX="^{}\\[~]|€\f";
+function countSms(){const t=$("c_text").value,cps=[...t];const gsm=cps.every(c=>GSM.includes(c)||GSMX.includes(c));
+  const len=gsm?cps.reduce((a,c)=>a+(GSMX.includes(c)?2:1),0):t.length;const single=gsm?160:70,per=gsm?153:67;
+  const parts=len<=single?1:Math.ceil(len/per);$("c_count").textContent=len+" characters · "+(gsm?"standard":"Unicode")+" · "+parts+" SMS"+(parts>8?" (too long, max 8)":"")}
+async function sendSms(){const to=$("c_to").value.trim(),text=$("c_text").value;msg("c_msg","Sending…");
+  const r=await jpost("/api/sms/send",{to,text});msg("c_msg",r.message,r.ok?"ok":"bad");if(r.ok){$("c_text").value="";countSms()}loadSms()}
+async function reply(){const text=$("r_text").value;if(!text.trim())return;msg("r_msg","Sending…");
+  const last=all().filter(m=>norm(m.peer)==thread).sort((a,b)=>(b.rx||0)-(a.rx||0))[0];
+  const r=await jpost("/api/sms/send",{to:last?last.peer:thread,text});msg("r_msg",r.message,r.ok?"ok":"bad");await loadSms()}
+function toggleSelect(){selecting=!selecting;selected.clear();$("btn_sel").textContent=selecting?"Cancel selection":"Select";$("btn_del").classList.toggle("hidden",!selecting);renderSms()}
+function sel(k,on){on?selected.add(k):selected.delete(k)}
+async function delKeys(keys){const ins=keys.filter(k=>k.startsWith("in")).map(k=>+k.slice(2)),outs=keys.filter(k=>k.startsWith("out")).map(k=>+k.slice(3));
+  let t=0;if(ins.length)t+=(await jpost("/api/sms/delete",{box:"in",ids:ins})).ok?ins.length:0;if(outs.length)t+=(await jpost("/api/sms/delete",{box:"out",ids:outs})).ok?outs.length:0;
+  msg("sms_msg","Deleted "+t+" message(s).");await loadSms()}
+async function delOne(k){if(confirm("Delete this message from the board?"))delKeys([k])}
+async function delSelected(){if(!selected.size)return;if(confirm("Delete "+selected.size+" message(s)?")){await delKeys([...selected]);toggleSelect()}}
+function copyText(t){(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>msg("sms_msg","Copied."),()=>prompt("Copy:",t))}
+function badge(){const a=document.querySelector('nav a[href="#sms"]');if(a&&st)a.textContent="SMS"+(st.board.sms_unread?" ("+st.board.sms_unread+")":"")}
+
 
 async function loadSettings(){
   const d=await (await api('/api/settings')).json();schema=d.schema;values=d.values;

@@ -222,3 +222,145 @@ bool sms_wait_code(int64_t since_us, int timeout_s, char *code, size_t cap) {
   devlog("otp: no matching SMS within %d s", timeout_s);
   return false;
 }
+
+// ---------- SMS manager ----------
+
+#define SENT_FILE "/data/sms_sent.jsonl"
+static uint32_t sent_last, seen_id;
+static bool sent_loaded;
+
+static uint32_t nvs_u32(const char *k) {
+  uint32_t v = 0;
+  nvs_handle_t h;
+  if (nvs_open("sms", NVS_READONLY, &h) == ESP_OK) {
+    nvs_get_u32(h, k, &v);
+    nvs_close(h);
+  }
+  return v;
+}
+
+static void nvs_put_u32(const char *k, uint32_t v) {
+  nvs_handle_t h;
+  if (nvs_open("sms", NVS_READWRITE, &h) == ESP_OK) {
+    nvs_set_u32(h, k, v);
+    nvs_commit(h);
+    nvs_close(h);
+  }
+}
+
+uint32_t smsstore_add_sent(const char *to, const char *text, int parts, bool ok, const char *error) {
+  xSemaphoreTake(mtx, portMAX_DELAY);
+  if (!sent_loaded) {
+    sent_last = nvs_u32("sent_id");
+    sent_loaded = true;
+  }
+  struct stat sb;
+  if (stat(SENT_FILE, &sb) == 0 && sb.st_size > ROTATE_BYTES) unlink(SENT_FILE);
+  uint32_t id = sent_last + 1;
+  cJSON *o = cJSON_CreateObject();
+  cJSON_AddNumberToObject(o, "id", id);
+  cJSON_AddNumberToObject(o, "rx", (double)time(NULL));
+  cJSON_AddStringToObject(o, "to", to);
+  cJSON_AddStringToObject(o, "text", text);
+  cJSON_AddNumberToObject(o, "parts", parts);
+  cJSON_AddBoolToObject(o, "ok", ok);
+  if (error && error[0]) cJSON_AddStringToObject(o, "error", error);
+  char *line = cJSON_PrintUnformatted(o);
+  cJSON_Delete(o);
+  FILE *f = fopen(SENT_FILE, "a");
+  bool w = f && line && fputs(line, f) >= 0 && fputc('\n', f) != EOF;
+  if (f) fclose(f);
+  free(line);
+  if (w) {
+    sent_last = id;
+    nvs_put_u32("sent_id", id);
+  }
+  xSemaphoreGive(mtx);
+  return w ? id : 0;
+}
+
+cJSON *smsstore_list_sent_json(int limit) {
+  cJSON *arr = cJSON_CreateArray();
+  xSemaphoreTake(mtx, portMAX_DELAY);
+  FILE *f = fopen(SENT_FILE, "r");
+  if (f) {
+    char *line = malloc(16 * 1024);
+    while (line && fgets(line, 16 * 1024, f)) {
+      cJSON *o = cJSON_Parse(line);
+      if (!o) continue;
+      cJSON_InsertItemInArray(arr, 0, o);
+      while (cJSON_GetArraySize(arr) > limit) cJSON_DeleteItemFromArray(arr, limit);
+    }
+    free(line);
+    fclose(f);
+  }
+  xSemaphoreGive(mtx);
+  return arr;
+}
+
+// Rewrites `path` without the listed ids. Returns removed count.
+static int rewrite_without(const char *path, const uint32_t *ids, int n) {
+  FILE *in = fopen(path, "r");
+  if (!in) return 0;
+  char tmp[48];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  FILE *out = fopen(tmp, "w");
+  if (!out) {
+    fclose(in);
+    return 0;
+  }
+  int removed = 0, kept_lines = 0;
+  char *line = malloc(24 * 1024);
+  while (line && fgets(line, 24 * 1024, in)) {
+    const char *p = strstr(line, "\"id\":");
+    uint32_t id = p ? (uint32_t)strtoul(p + 5, NULL, 10) : 0;
+    bool drop = false;
+    for (int i = 0; i < n && !drop; i++) drop = ids[i] == id;
+    if (drop) removed++;
+    else {
+      fputs(line, out);
+      kept_lines++;
+    }
+  }
+  free(line);
+  fclose(in);
+  bool ok = fflush(out) == 0 && fsync(fileno(out)) == 0;
+  fclose(out);
+  if (ok && removed) {
+    unlink(path);
+    rename(tmp, path);
+  } else {
+    unlink(tmp);
+    if (!ok) removed = 0;
+  }
+  (void)kept_lines;
+  return removed;
+}
+
+int smsstore_delete(const char *box, const uint32_t *ids, int n) {
+  int removed = 0;
+  xSemaphoreTake(mtx, portMAX_DELAY);
+  if (!strcmp(box, "out")) {
+    removed = rewrite_without(SENT_FILE, ids, n);
+  } else {
+    removed = rewrite_without(FILE_OLD, ids, n);
+    int r2 = rewrite_without(FILE_CUR, ids, n);
+    removed += r2;
+    count -= r2;
+    if (count < 0) count = 0;
+  }
+  xSemaphoreGive(mtx);
+  devlog("sms store: deleted %d message(s) from %s", removed, box);
+  return removed;
+}
+
+uint32_t smsstore_seen(void) {
+  if (!seen_id) seen_id = nvs_u32("seen");
+  return seen_id;
+}
+
+void smsstore_set_seen(uint32_t id) {
+  if (id <= smsstore_seen()) return;
+  seen_id = id;
+  nvs_put_u32("seen", id);
+}

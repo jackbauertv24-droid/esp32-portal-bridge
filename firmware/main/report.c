@@ -61,6 +61,8 @@ cJSON *status_json(void) {
   cJSON_AddBoolToObject(b, "setup_done", cfg_bool("setup_done"));
   cJSON_AddNumberToObject(b, "sms_stored", smsstore_count());
   cJSON_AddNumberToObject(b, "sms_last_id", smsstore_last_id());
+  uint32_t seen = smsstore_seen(), last = smsstore_last_id();
+  cJSON_AddNumberToObject(b, "sms_unread", last > seen ? last - seen : 0);
   netmgr_status_json(root);
   lte_status_json(root);
   modem_status_json(root);
