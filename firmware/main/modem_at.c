@@ -6,6 +6,8 @@
 #include <string.h>
 
 #include "board.h"
+#include "calls.h"
+#include "callparse.h"
 #include "devlog.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -78,7 +80,18 @@ static bool read_line(char *out, size_t cap, int wait_ms) {
 
 static void handle_urc(const char *l) {
   st.urc_count++;
-  log_line("URC", l);
+  char arg[28];
+  call_urc_t cu = call_urc_parse(l, arg, sizeof(arg));
+  // Key presses may be a PIN: log that one arrived, never which.
+  if (cu == CU_DTMF) devlog("URC <key press>");
+  else if (call_urc_maybe_dtmf(l)) {
+    char masked[80];
+    snprintf(masked, sizeof(masked), "%s", l);
+    for (char *p = strchr(masked, ':'); p && *p; p++)
+      if (*p >= '0' && *p <= '9') *p = '#';
+    devlog("URC unrecognised key report, format: %s", masked);
+  } else log_line("URC", l);
+  if (cu != CU_NONE) calls_on_urc(cu, arg);
   if (!strncmp(l, "+CMTI:", 6)) {
     st.cmti_count++;
     sms_poll_now = true;
@@ -98,6 +111,20 @@ static bool is_final(const char *l, bool *ok) {
   return false;
 }
 
+// Notifications that can arrive in the middle of a command's reply; they are
+// handled as notifications instead of being taken as part of the reply.
+static bool unsolicited(const char *l, const char *cmd) {
+  char a[28];
+  call_urc_t cu = call_urc_parse(l, a, sizeof(a));
+  if (cu == CU_RING || cu == CU_CLIP || cu == CU_DTMF || cu == CU_MISSED) return true;
+  if (!strncmp(l, "VOICE CALL:", 11) || !strncmp(l, "+CMTI:", 6) || call_urc_maybe_dtmf(l)) return true;
+  // A call ending while some other command runs.
+  if (!strcmp(l, "NO CARRIER") && strncmp(cmd, "ATD", 3) && strncmp(cmd, "ATA", 3) && strncmp(cmd, "ATH", 3) &&
+      strncmp(cmd, "AT+CHUP", 7))
+    return true;
+  return false;
+}
+
 static char *cmd_locked(const char *cmd, int timeout_ms, bool *ok_out) {
   char line[2048];
   while (read_line(line, sizeof(line), 0)) handle_urc(line);
@@ -112,6 +139,10 @@ static char *cmd_locked(const char *cmd, int timeout_ms, bool *ok_out) {
   while (esp_timer_get_time() < until) {
     if (!read_line(line, sizeof(line), 50)) continue;
     if (!strcmp(line, cmd)) continue;  // echo
+    if (unsolicited(line, cmd)) {
+      handle_urc(line);
+      continue;
+    }
     log_line("AT<", line);
     bool fin = is_final(line, &ok);
     if (fin && ok) {
@@ -276,6 +307,11 @@ static void identify_locked(void) {
   // where notifications go to the USB port instead of the UART.
   cmd_quiet("AT+CMGF=0", 2000);
   cmd_quiet("AT+CNMI=2,1,0,0,0", 2000);
+  // Calls: caller number with each RING; key-press reports where the firmware
+  // has the SIM800-style switch (an ERROR here is expected on firmware that
+  // reports keys without it).
+  cmd_quiet("AT+CLIP=1", 2000);
+  cmd_quiet("AT+DDET=1", 2000);
 }
 
 // ---------- SMS ingestion ----------
@@ -612,6 +648,10 @@ int modem_send_sms(const char *to, const char *text, char *err, size_t errcap) {
     while (!fin && esp_timer_get_time() < until) {
       if (!read_line(line, sizeof(line), 100)) continue;
       if (looks_like_pdu(line)) continue;  // echo of the PDU
+      if (unsolicited(line, "AT+CMGS")) {
+        handle_urc(line);
+        continue;
+      }
       log_line("AT<", line);
       if (!strncmp(line, "+CMGS:", 6)) ok = true;
       else {

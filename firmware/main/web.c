@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "calls.h"
 #include "debug.h"
 #include "devices.h"
 #include "meter.h"
@@ -573,6 +574,26 @@ static esp_err_t h_track_post(httpd_req_t *req) {
   return e;
 }
 
+static esp_err_t h_calls(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, calls_json());
+}
+
+// POST {action: "hangup"|"mic_on"|"mic_off"|"spk_on"|"spk_off"}
+static esp_err_t h_calls_post(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 256);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *act = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "action")) : NULL;
+  char m[80];
+  bool ok = act && calls_action(act, m, sizeof(m));
+  if (!act) snprintf(m, sizeof(m), "missing action");
+  esp_err_t e = send_result(req, ok, m);
+  cJSON_Delete(o);
+  return e;
+}
+
 static esp_err_t h_update(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -739,6 +760,8 @@ void web_start(void) {
       {"/api/track", HTTP_GET, h_track},
       {"/api/track", HTTP_POST, h_track_post},
       {"/api/track/day", HTTP_GET, h_track_day},
+      {"/api/calls", HTTP_GET, h_calls},
+      {"/api/calls", HTTP_POST, h_calls_post},
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},

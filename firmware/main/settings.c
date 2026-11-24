@@ -69,6 +69,16 @@ static const def_t DEFS[] = {
     {"dm_budget", "Data & budget", "Monthly budget", "0 = none. With a price set, the budget also acts as a limit (budget / price = GB).", T_STR, "0", 1, 12, "decimal", false},
     {"dm_curr", "Data & budget", "Currency", NULL, T_STR, "HKD", 1, 6, NULL, false},
     {"dm_overhead", "Data & budget", "Carrier overhead (%)", "Added to measured 4G bytes, since carriers also bill protocol overhead. Raise it if your carrier's figure is higher.", T_INT, "3", 0, 20, NULL, false},
+    // Calls
+    {"ca_en", "Calls", "Answer calls with a PIN", "The board answers calls to its SIM with all audio muted. The caller keys in the PIN; then the board's microphone goes live (the caller hears the room). The board's speaker stays muted until the caller keys the unmute sequence.", T_BOOL, "0", 0, 0, NULL, false},
+    {"ca_pin", "Calls", "PIN (6 digits)", "Callers type it on their keypad. '*' or '#' starts the entry over. 3 wrong PINs end the call; 5 failed calls within an hour stop answering for an hour.", T_SECRET, "", 0, 6, "pin6", false},
+    {"ca_from", "Calls", "Only answer these numbers", "Comma-separated. Empty = any caller (the PIN still applies).", T_STR, "", 0, 120, NULL, false},
+    {"ca_rings", "Calls", "Answer after rings", NULL, T_INT, "2", 1, 10, NULL, false},
+    {"ca_pin_s", "Calls", "Time to enter the PIN (s)", NULL, T_INT, "30", 10, 120, NULL, false},
+    {"ca_unmute", "Calls", "Key sequence: caller unmutes the board speaker", NULL, T_STR, "*1", 1, 6, "dtmf", false},
+    {"ca_mute", "Calls", "Key sequence: caller mutes the board speaker", NULL, T_STR, "*0", 1, 6, "dtmf", false},
+    {"ca_max_min", "Calls", "Longest call (min)", "0 = no limit.", T_INT, "0", 0, 600, NULL, false},
+    {"ca_tones", "Calls", "Beep to the caller", "One beep when the PIN is accepted, three when it is wrong.", T_BOOL, "1", 0, 0, NULL, false},
     // Tracker
     {"tr_en", "Tracker", "Record position and signal", "Turns the modem's GNSS on and logs a point every interval to the board's flash (Tracker page). Needs the GNSS antenna.", T_BOOL, "0", 0, 0, NULL, false},
     {"tr_int_s", "Tracker", "Interval (s)", NULL, T_INT, "60", 10, 3600, NULL, false},
@@ -278,6 +288,14 @@ static esp_err_t validate(int i, const char *v, char *norm, size_t ncap, char *e
           double x = strtod(v, &end);
           if (*end || x < 0) goto bad;
         }
+        if (!strcmp(d->options, "pin6")) {
+          if (len != 6) goto bad;
+          for (const char *p = v; *p; p++)
+            if (!isdigit((unsigned char)*p)) goto bad;
+        }
+        if (!strcmp(d->options, "dtmf"))
+          for (const char *p = v; *p; p++)
+            if (!isdigit((unsigned char)*p) && *p != '*' && *p != '#') goto bad;
         if (!strcmp(d->options, "digits"))
           for (const char *p = v; *p; p++)
             if (!isdigit((unsigned char)*p)) goto bad;

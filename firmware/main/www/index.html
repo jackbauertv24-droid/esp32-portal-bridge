@@ -71,6 +71,10 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
   <div class="card"><h2>Login page</h2><table id="t_portal"></table>
     <button onclick="go('portal')">Open login tools</button></div>
   <div class="card"><h2>Modem &amp; SIM</h2><table id="t_modem"></table></div>
+  <div class="card"><h2>Calls</h2><table id="t_calls"></table>
+    <div id="calls_ctl" class="hidden"><button class="danger" onclick="callAct('hangup')">Hang up</button><button class="sec" id="cl_mic" onclick="callAct(this.dataset.a)">Mute microphone</button><button class="sec" id="cl_spk" onclick="callAct(this.dataset.a)">Unmute speaker</button></div>
+    <div class="msg" id="calls_msg"></div>
+    <details><summary>Recent calls</summary><div id="calls_log"></div></details></div>
   <div class="card"><h2>SMS forwarding</h2><table id="t_fwd"></table></div>
   <div class="card"><h2>Board</h2><table id="t_board"></table></div>
   <div class="card"><h2>Recent events</h2><div id="events" class="mut">–</div></div>
@@ -359,6 +363,7 @@ function route(){
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
   document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
   if(st&&!st.board.setup_done)return showSetup();
+  if(page=='status')loadCalls();
   if(page=='sms')loadSms();
   if(page=='data')renderData();
   if(page=='devices')loadDevices();
@@ -777,7 +782,20 @@ function trackExport(kind){const d=$("tr_day").value;if(!d)return;
     +fx.map(p=>'<trkpt lat="'+p.lat+'" lon="'+p.lon+'">'+(p.alt_m!=null?'<ele>'+p.alt_m+'</ele>':'')+'<time>'+new Date(p.t*1000).toISOString()+'</time>'+(p.rsrp!=null?'<desc>RSRP '+p.rsrp+' dBm</desc>':'')+'</trkpt>').join("")+'</trkseg></trk></gpx>\n';
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([gpx],{type:"application/gpx+xml"}));a.download="track-"+d+".gpx";a.click()}
 
-tick().then(route);setInterval(()=>{if(page=='devices')loadDevices()},3000);setInterval(()=>{if(page=='tracker')loadTracker()},15000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
+async function loadCalls(){
+  try{const c=await (await api("/api/calls")).json(),live=c.state=="waiting for PIN"||c.state=="connected";
+    let h=row("Auto-answer",!c.enabled?'off (<a href="#settings">Settings › Calls</a>)':!c.pin_set?'<span class="bad">on, but no 6-digit PIN set: calls are not answered</span>':"on, PIN required",c.enabled&&c.pin_set?"ok":"")
+      +(c.locked_s?row("Locked",'too many wrong PINs; answering again in '+dur(c.locked_s),"bad"):"")
+      +row("Now",c.state=="idle"?"no call":esc(c.state)+(c.number?" · "+esc(c.number):"")+(c.state=="ringing"?" · "+c.rings+" rings":"")+(live?" · "+dur(c.seconds):""),live?"warn":"");
+    if(live)h+=row("Audio","board microphone "+(c.mic_muted?"<b>muted</b>":"<b>on</b> (caller hears the room)")+" · board speaker "+(c.spk_muted?"<b>muted</b>":"<b>on</b>"))
+      +row("Keys received",c.keys_seen+(c.state=="waiting for PIN"&&c.keys_seen==0&&c.seconds>10?' <span class="warn">(none yet: if the caller is typing, this modem may not report key presses; send a report)</span>':""));
+    $("t_calls").innerHTML=h;$("calls_ctl").classList.toggle("hidden",!live);
+    if(live){$("cl_mic").textContent=c.mic_muted?"Unmute microphone":"Mute microphone";$("cl_mic").dataset.a=c.mic_muted?"mic_on":"mic_off";
+      $("cl_spk").textContent=c.spk_muted?"Unmute speaker":"Mute speaker";$("cl_spk").dataset.a=c.spk_muted?"spk_on":"spk_off"}
+    $("calls_log").innerHTML=c.log.length?c.log.map(l=>'<div class="ev"><span class="mut">'+ago(l.t)+'</span> · '+esc(l.number)+' · '+esc(l.result)+(l.seconds?' · '+dur(l.seconds):'')+'</div>').join(""):'<span class="mut">No calls since the board started.</span>'}catch(e){}}
+async function callAct(a){const r=await jpost("/api/calls",{action:a});msg("calls_msg",r.message,r.ok?"ok":"bad");loadCalls()}
+
+tick().then(route);setInterval(()=>{if(page=='devices')loadDevices();if(page=='status')loadCalls()},3000);setInterval(()=>{if(page=='tracker')loadTracker()},15000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
 </script>
 </body>
 </html>
