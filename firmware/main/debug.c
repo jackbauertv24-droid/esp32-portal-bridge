@@ -98,6 +98,39 @@ static void cam_config(camera_config_t *c, framesize_t fs, int xclk_hz, pixforma
   };
 }
 
+// The camera driver's own error and warning lines logged after `marker`
+// (ESP-IDF log lines are captured by the device log), joined with " | ".
+static void driver_errors(const char *marker, char *out, size_t cap) {
+  out[0] = 0;
+  size_t n = 0;
+  char *log = devlog_dump(&n);
+  if (!log) return;
+  char *p = NULL;
+  for (char *q = strstr(log, marker); q; q = strstr(q + 1, marker)) p = q;
+  size_t o = 0;
+  for (char *line = p ? strchr(p, '\n') : NULL; line && *line && o + 8 < cap;) {
+    line++;
+    char *end = strchr(line, '\n');
+    size_t len = end ? (size_t)(end - line) : strlen(line);
+    char buf[200];
+    size_t k = 0;
+    for (size_t i = 0; i < len && k < sizeof(buf) - 1; i++) {
+      if (line[i] == 0x1b) {  // skip colour codes
+        while (i < len && line[i] != 'm') i++;
+        continue;
+      }
+      buf[k++] = line[i];
+    }
+    buf[k] = 0;
+    if (strstr(buf, "E (") || strstr(buf, "W (")) {
+      const char *msg = strstr(buf, "E (") ? strstr(buf, "E (") : strstr(buf, "W (");
+      o += (size_t)snprintf(out + o, cap - o, "%s%.110s", o ? " | " : "", msg);
+    }
+    line = end;
+  }
+  free(log);
+}
+
 // Starts the camera, trying the settings that most often matter: a slower
 // clock, and raw RGB565 for sensors without a JPEG encoder. Each attempt is
 // described in `log` (may be NULL).
@@ -114,10 +147,14 @@ static esp_err_t cam_start(framesize_t fs, char *how, size_t hcap, cJSON *log) {
   for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
     camera_config_t c;
     cam_config(&c, fs, T[i].hz, T[i].pf);
+    char marker[64];
+    snprintf(marker, sizeof(marker), "camera: trying %s", T[i].name);
+    devlog("%s", marker);
     e = esp_camera_init(&c);
     if (log) {
-      char m[96];
-      snprintf(m, sizeof(m), "%s: %s", T[i].name, e == ESP_OK ? "started" : esp_err_to_name(e));
+      char why[400] = "", m[480];
+      if (e != ESP_OK) driver_errors(marker, why, sizeof(why));
+      snprintf(m, sizeof(m), "%s: %s%s%s", T[i].name, e == ESP_OK ? "started" : esp_err_to_name(e), why[0] ? " - " : "", why);
       cJSON_AddItemToArray(log, cJSON_CreateString(m));
     }
     devlog("camera: init %s -> %s", T[i].name, esp_err_to_name(e));
@@ -230,6 +267,42 @@ static int sccb_scan(char *out, size_t cap) {
   return cams;
 }
 
+// Reads the sensor's chip id directly (clock must be running): OV5640/OV3660
+// use 16-bit registers 0x300A/0x300B, GC2145 8-bit 0xF0/0xF1, OV2640 bank 1
+// registers 0x0A/0x0B.
+static void sensor_id(int addr, char *out, size_t cap) {
+  snprintf(out, cap, "no id read");
+  i2c_master_bus_handle_t bus = NULL;
+  i2c_master_dev_handle_t dev = NULL;
+  i2c_master_bus_config_t bc = {.i2c_port = -1, .sda_io_num = CAM_SDA, .scl_io_num = CAM_SCL,
+                                .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,
+                                .flags.enable_internal_pullup = true};
+  if (i2c_new_master_bus(&bc, &bus) != ESP_OK) return;
+  i2c_device_config_t dc = {.dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = (uint16_t)addr, .scl_speed_hz = 100000};
+  if (i2c_master_bus_add_device(bus, &dc, &dev) == ESP_OK) {
+    uint8_t hi = 0, lo = 0;
+    if (addr == 0x3C) {
+      uint8_t r1[2] = {0x30, 0x0A}, r2[2] = {0x30, 0x0B};
+      bool ok16 = i2c_master_transmit_receive(dev, r1, 2, &hi, 1, 50) == ESP_OK &&
+                  i2c_master_transmit_receive(dev, r2, 2, &lo, 1, 50) == ESP_OK;
+      uint8_t g1 = 0xF0, g2 = 0xF1, ghi = 0, glo = 0;
+      bool ok8 = i2c_master_transmit_receive(dev, &g1, 1, &ghi, 1, 50) == ESP_OK &&
+                 i2c_master_transmit_receive(dev, &g2, 1, &glo, 1, 50) == ESP_OK;
+      unsigned id16 = (unsigned)(hi << 8 | lo), id8 = (unsigned)(ghi << 8 | glo);
+      snprintf(out, cap, "16-bit id register: %s0x%04X%s; 8-bit id register: %s0x%04X%s", ok16 ? "" : "(read failed) ", id16,
+               id16 == 0x5640 ? " = OV5640" : id16 == 0x3660 ? " = OV3660" : "", ok8 ? "" : "(read failed) ", id8,
+               id8 == 0x2145 ? " = GC2145" : "");
+    } else if (addr == 0x30) {
+      uint8_t sel[2] = {0xFF, 0x01}, a = 0x0A, b = 0x0B;
+      bool ok = i2c_master_transmit(dev, sel, 2, 50) == ESP_OK && i2c_master_transmit_receive(dev, &a, 1, &hi, 1, 50) == ESP_OK &&
+                i2c_master_transmit_receive(dev, &b, 1, &lo, 1, 50) == ESP_OK;
+      snprintf(out, cap, "id register: %s0x%02X%02X%s", ok ? "" : "(read failed) ", hi, lo, hi == 0x26 ? " = OV2640" : "");
+    }
+    i2c_master_bus_rm_device(dev);
+  }
+  i2c_del_master_bus(bus);
+}
+
 static void xclk(bool on) {
   if (on) {
     ledc_timer_config_t t = {.speed_mode = LEDC_LOW_SPEED_MODE, .duty_resolution = LEDC_TIMER_1_BIT,
@@ -301,8 +374,12 @@ static esp_err_t h_camdiag(httpd_req_t *req) {
   xclk(true);
   vTaskDelay(pdMS_TO_TICKS(20));
   int cams_clk = sccb_scan(found, sizeof(found));
+  char idtxt[160] = "";
+  if (strstr(found, "0x3C")) sensor_id(0x3C, idtxt, sizeof(idtxt));
+  else if (strstr(found, "0x30")) sensor_id(0x30, idtxt, sizeof(idtxt));
   xclk(false);
   step(st, "Who answers with the 20 MHz camera clock on (GPIO39)", cams_clk > 0 ? 1 : 0, found);
+  if (idtxt[0]) step(st, "Sensor chip id (read directly)", strstr(idtxt, " = ") ? 1 : 0, idtxt);
   cams = cams > cams_clk ? cams : cams_clk;
 
   cJSON *tries = cJSON_CreateArray();
