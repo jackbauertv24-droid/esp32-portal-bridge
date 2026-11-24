@@ -143,17 +143,17 @@ char *report_build(void) {
   // Each task's unused stack: shows which stacks are oversized (and which are
   // in internal RAM), to tune memory.
   UBaseType_t nt = uxTaskGetNumberOfTasks();
-  TaskStatus_t *ts = heap_caps_malloc(sizeof(TaskStatus_t) * (nt + 4), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (ts) {
-    nt = uxTaskGetSystemState(ts, nt + 4, NULL);
+  TaskStatus_t *tl = heap_caps_malloc(sizeof(TaskStatus_t) * (nt + 4), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (tl) {
+    nt = uxTaskGetSystemState(tl, nt + 4, NULL);
     put(&s, "tasks (unused stack bytes, stack in internal/PSRAM):");
     for (UBaseType_t i = 0; i < nt; i++) {
-      bool ext = esp_ptr_external_ram(ts[i].pxStackBase);
-      snprintf(line, sizeof(line), " %s %u%s;", ts[i].pcTaskName, (unsigned)ts[i].usStackHighWaterMark, ext ? " psram" : "");
+      bool ext = esp_ptr_external_ram(tl[i].pxStackBase);
+      snprintf(line, sizeof(line), " %s %u%s;", tl[i].pcTaskName, (unsigned)tl[i].usStackHighWaterMark, ext ? " psram" : "");
       put(&s, line);
     }
     put(&s, "\n");
-    free(ts);
+    free(tl);
   }
   esp_core_dump_summary_t *cd = malloc(sizeof(esp_core_dump_summary_t));
   if (cd && esp_core_dump_get_summary(cd) == ESP_OK) {
