@@ -69,6 +69,13 @@ static const def_t DEFS[] = {
     {"dm_budget", "Data & budget", "Monthly budget", "0 = none. With a price set, the budget also acts as a limit (budget / price = GB).", T_STR, "0", 1, 12, "decimal", false},
     {"dm_curr", "Data & budget", "Currency", NULL, T_STR, "HKD", 1, 6, NULL, false},
     {"dm_overhead", "Data & budget", "Carrier overhead (%)", "Added to measured 4G bytes, since carriers also bill protocol overhead. Raise it if your carrier's figure is higher.", T_INT, "3", 0, 20, NULL, false},
+    // Tracker
+    {"tr_en", "Tracker", "Record position and signal", "Turns the modem's GNSS on and logs a point every interval to the board's flash (Tracker page). Needs the GNSS antenna.", T_BOOL, "0", 0, 0, NULL, false},
+    {"tr_int_s", "Tracker", "Interval (s)", NULL, T_INT, "60", 10, 3600, NULL, false},
+    {"tr_min_m", "Tracker", "Skip positions closer than (m)", "0 = record every interval. When standing still, a point is still recorded every 10 minutes; points without a GPS fix (signal only) are always recorded.", T_INT, "0", 0, 10000, NULL, false},
+    {"tr_keep_d", "Tracker", "Keep days", "Older days are deleted; the oldest also go when storage is three-quarters full.", T_INT, "30", 1, 365, NULL, false},
+    {"tr_sms_kw", "Tracker", "Location by SMS: keyword", "An SMS that is exactly this word (any case) from an allowed number gets a reply with a map link. Works even with recording off (GNSS is switched on for up to a minute).", T_STR, "where", 0, 20, NULL, false},
+    {"tr_sms_from", "Tracker", "Location by SMS: allowed numbers", "Comma-separated. Only these numbers get a reply. Empty = off.", T_STR, "", 0, 120, NULL, false},
     // Speed test
     {"sp_down_url", "Speed test", "Download test URL", "{bytes} is replaced by the size to fetch; also used for the latency check with 0 bytes.", T_STR, "https://speed.cloudflare.com/__down?bytes={bytes}", 10, 200, "url", false},
     {"sp_up_url", "Speed test", "Upload test URL", "Receives a POST of the upload size.", T_STR, "https://speed.cloudflare.com/__up", 10, 200, "url", false},

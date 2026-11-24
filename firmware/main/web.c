@@ -30,6 +30,7 @@
 #include "smsstore.h"
 #include "speedtest.h"
 #include "survey.h"
+#include "tracker.h"
 #include "web.h"
 
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -524,6 +525,54 @@ static esp_err_t h_speed_post(httpd_req_t *req) {
   return e;
 }
 
+static esp_err_t h_track(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, tracker_json());
+}
+
+static esp_err_t h_track_day(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char day[12], path[40], dl[4];
+  query(req, "d", day, sizeof(day));
+  query(req, "download", dl, sizeof(dl));
+  FILE *f = tracker_day_path(day, path, sizeof(path)) ? fopen(path, "r") : NULL;
+  if (!f) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such day");
+  httpd_resp_set_type(req, "text/csv; charset=utf-8");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  char disp[64];
+  snprintf(disp, sizeof(disp), "attachment; filename=\"track-%s.csv\"", day);
+  if (dl[0] == '1') httpd_resp_set_hdr(req, "Content-Disposition", disp);
+  char *buf = malloc(4096);
+  size_t n;
+  while (buf && (n = fread(buf, 1, 4096, f)) > 0)
+    if (httpd_resp_send_chunk(req, buf, (ssize_t)n) != ESP_OK) break;
+  free(buf);
+  fclose(f);
+  return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+// POST {action: "now"|"delete", day}
+static esp_err_t h_track_post(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 256);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *act = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "action")) : NULL;
+  const char *day = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "day")) : NULL;
+  esp_err_t e;
+  if (act && !strcmp(act, "now")) {
+    tracker_log_now();
+    e = send_result(req, true, "Recording a point (takes a few seconds).");
+  } else if (act && !strcmp(act, "delete")) {
+    bool ok = tracker_delete_day(day);
+    e = send_result(req, ok, ok ? "Day deleted." : "No such day.");
+  } else {
+    e = send_result(req, false, "unknown action");
+  }
+  cJSON_Delete(o);
+  return e;
+}
+
 static esp_err_t h_update(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -687,6 +736,9 @@ void web_start(void) {
       {"/api/wifi/survey", HTTP_GET, h_survey},
       {"/api/speed", HTTP_GET, h_speed},
       {"/api/speed", HTTP_POST, h_speed_post},
+      {"/api/track", HTTP_GET, h_track},
+      {"/api/track", HTTP_POST, h_track_post},
+      {"/api/track/day", HTTP_GET, h_track_day},
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},

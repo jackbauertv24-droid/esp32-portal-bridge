@@ -334,6 +334,7 @@ void netmgr_start(void) {
 
 bool netmgr_sta_connected(void) { return sta_has_ip; }
 esp_netif_t *netmgr_ap_netif(void) { return ap_if; }
+void netmgr_uplink(char *out, size_t cap) { snprintf(out, cap, "%s", uplink); }
 net_state_t netmgr_wifi_state(void) { return wifi_state; }
 void netmgr_portal_url(char *out, size_t cap) { snprintf(out, cap, "%s", portal_url); }
 void netmgr_recheck(void) { recheck_now = true; }

@@ -43,6 +43,18 @@ static void test_phone(void) {
   CHECK_STR("fmt local", out, "91234567");
 }
 
+static void test_phone_match(void) {
+  CHECK("same with country code", phone_same("+85291234567", "91234567"));
+  CHECK("same with spaces and 00", phone_same("00852 9123 4567", "+852-9123-4567"));
+  CHECK("different", !phone_same("+85291234567", "+85291234568"));
+  CHECK("too short never matches", !phone_same("123", "123"));
+  CHECK("empty never matches", !phone_same("", ""));
+  CHECK("in list", phone_in_list("+85291234567", "61234567, 91234567"));
+  CHECK("in list semicolon", phone_in_list("91234567", "+85261234567;+85291234567"));
+  CHECK("not in list", !phone_in_list("+85291234567", "61234567,51234567"));
+  CHECK("empty list", !phone_in_list("+85291234567", ""));
+}
+
 static void test_otp(void) {
   char c[16];
   CHECK("otp found", otp_extract("Your code is 482913. Valid 5 min", 4, 8, c, sizeof c) && !strcmp(c, "482913"));
@@ -146,6 +158,7 @@ static void test_forms(void) {
 int main(void) {
   test_phone();
   test_otp();
+  test_phone_match();
   test_placeholders();
   test_url();
   test_forms();

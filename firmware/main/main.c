@@ -27,6 +27,7 @@
 #include "portal.h"
 #include "settings.h"
 #include "smsstore.h"
+#include "tracker.h"
 #include "web.h"
 
 void app_main(void) {
@@ -65,6 +66,7 @@ void app_main(void) {
   lte_start();
   portal_start();
   forward_start();
+  tracker_start();
   event_post("Started %s%s", FW_VERSION, cfg_bool("setup_done") ? "" : " (first-run setup pending)");
 
   // Keep this firmware only if it survives a minute; otherwise the bootloader

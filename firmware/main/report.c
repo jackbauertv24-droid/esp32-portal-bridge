@@ -31,6 +31,7 @@
 #include "redact.h"
 #include "settings.h"
 #include "smsstore.h"
+#include "tracker.h"
 
 static const char *reset_reason(void) {
   switch (esp_reset_reason()) {
@@ -137,6 +138,8 @@ char *report_build(void) {
   meter_summary(sum, 2048);
   put(&s, sum);
   devices_summary(sum, 2048);
+  put(&s, sum);
+  tracker_summary(sum, 2048);
   put(&s, sum);
   free(sum);
 

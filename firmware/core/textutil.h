@@ -24,6 +24,12 @@ int otp_extract(const char *text, int min_len, int max_len, char *out, size_t ca
 // Case-insensitive substring test.
 int str_contains_ci(const char *hay, const char *needle);
 
+// Same phone number, ignoring formatting and country code: the last 8 digits
+// match (and there are at least 6).
+int phone_same(const char *a, const char *b);
+// `num` matches one entry of a comma/semicolon/space separated list.
+int phone_in_list(const char *num, const char *list);
+
 // Replaces every spelling of the placeholder <name> in `in`: raw "<name>",
 // URL-encoded "%3Cname%3E", JSON "<name>" and HTML "&lt;name&gt;".
 // Returns a malloc'd string (caller frees) and stores the number of

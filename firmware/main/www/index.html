@@ -49,7 +49,7 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
 <header>
   <div class="top"><span class="dot" id="dot"></span><b>Portal Bridge</b><small id="fw"></small></div>
   <nav id="nav">
-    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#devices">Devices</a><a href="#survey">Wi-Fi survey</a><a href="#speed">Speed test</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
+    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#devices">Devices</a><a href="#survey">Wi-Fi survey</a><a href="#speed">Speed test</a><a href="#tracker">Tracker</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
   </nav>
 </header>
 <main>
@@ -316,6 +316,29 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
     <button class="sec" onclick="speedAct('clear')">Clear history</button>
   </div>
 </section>
+<section id="p-tracker" class="hidden">
+  <div class="card">
+    <h2>Now</h2>
+    <table id="tr_now"></table>
+    <button class="sec" onclick="trackNow()">Record a point now</button>
+    <div class="msg" id="tr_msg"></div>
+  </div>
+  <div class="card">
+    <div class="row"><h2 style="margin:0;flex:1">Track</h2><select id="tr_day" style="width:auto" onchange="loadDay()"></select></div>
+    <div class="help" id="tr_info"></div>
+    <div id="tr_map" style="height:340px;margin-top:10px;border-radius:8px;overflow:hidden;background:var(--chip)"></div>
+    <div class="help">Dots by 4G signal: <span class="ok">■</span> good (RSRP ≥ −90 dBm) <span class="warn">■</span> fair (≥ −105) <span class="bad">■</span> weak. The map needs internet on your phone or computer; without it a plain plot is shown.</div>
+    <h3>4G signal over the day (RSRP, dBm)</h3>
+    <div id="tr_chart"></div>
+    <button class="sec" onclick="trackExport('csv')">Download CSV</button><button class="sec" onclick="trackExport('gpx')">Download GPX</button>
+    <button class="danger" onclick="trackDelete()">Delete this day</button>
+  </div>
+  <div class="card">
+    <h2>About</h2>
+    <p class="mut">Turn recording on and set the interval under <b>Settings › Tracker</b>. The GNSS antenna must be connected and see the sky; the first fix can take a few minutes. Without a fix, points still record the 4G signal, so you can map coverage by time.</p>
+    <p class="mut">Location by SMS: set a keyword and the numbers allowed to ask under <b>Settings › Tracker</b>. Texting the keyword from an allowed number gets a reply with a map link. Positions stay on the board; they are never put into reports.</p>
+  </div>
+</section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -332,7 +355,7 @@ function go(p){location.hash=p}
 function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
 function route(){
   page=(location.hash||'#status').slice(1);
-  if(!['status','portal','sms','data','devices','survey','speed','settings','tools','debug'].includes(page))page='status';
+  if(!['status','portal','sms','data','devices','survey','speed','tracker','settings','tools','debug'].includes(page))page='status';
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
   document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
   if(st&&!st.board.setup_done)return showSetup();
@@ -340,6 +363,7 @@ function route(){
   if(page=='data')renderData();
   if(page=='devices')loadDevices();
   if(page=='speed')loadSpeed();
+  if(page=='tracker')loadTracker();
   if(page=='settings')loadSettings();
   if(page=='portal'){loadRecipe();loadRecs();renderPortal()}
 }
@@ -690,7 +714,70 @@ async function loadSpeed(){
 async function speedStart(via){const r=await jpost("/api/speed",{action:"start",via});msg("sp_msg",r.ok?"":r.message,r.ok?"":"bad");loadSpeed()}
 async function speedAct(a){if(a=="clear"&&!confirm("Clear all speed test results?"))return;const r=await jpost("/api/speed",{action:a});msg("sp_msg",r.message,r.ok?"ok":"bad");loadSpeed()}
 
-tick().then(route);setInterval(()=>{if(page=='devices')loadDevices()},3000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
+let trData=null,trPts=[],trMap=null,trLayer=null,trLeaflet=null;
+const rsrpCls=v=>v==null||isNaN(v)?"mut":v>=-90?"ok":v>=-105?"warn":"bad";
+function dayName(d){return d=="00000000"?"Before the clock was set":d.slice(0,4)+"-"+d.slice(4,6)+"-"+d.slice(6)}
+async function loadTracker(){
+  try{const d=trData=await (await api("/api/track")).json(),f=d.fix,c=d.cell;
+    $("tr_now").innerHTML=row("Recording",d.enabled?'on, every '+d.interval_s+' s · '+d.points_today+' points today':'off (turn on in <a href="#settings">Settings › Tracker</a>)',d.enabled?"ok":"")
+      +row("GPS",!d.gnss_on&&!f?"off":f?'<a target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat='+f.lat.toFixed(6)+'&mlon='+f.lon.toFixed(6)+'#map=17/'+f.lat.toFixed(6)+'/'+f.lon.toFixed(6)+'">'+f.lat.toFixed(6)+", "+f.lon.toFixed(6)+'</a> · '+f.sats+" satellites · HDOP "+f.hdop+" · "+Math.round(f.speed_kmh)+" km/h · "+Math.round(f.alt_m)+" m · "+(f.age_s<90?"now":dur(f.age_s)+" ago"):"on, waiting for the first fix (needs open sky)",f&&f.age_s<300?"ok":"warn")
+      +(c?row("4G cell",esc(c.sys)+(c.band?" · band "+c.band:"")+(c.mccmnc?" · "+esc(c.mccmnc):"")+(c.cell>=0?" · cell "+c.cell+" (TAC "+esc(c.tac)+", PCI "+c.pci+")":""))
+        +row("4G signal",(c.rsrp!=null?"RSRP "+c.rsrp+" dBm":"")+(c.rsrq!=null?" · RSRQ "+c.rsrq+" dB":"")+(c.sinr!=null?" · SINR "+c.sinr+" dB":"")+(c.csq!=99?" · CSQ "+c.csq:""),rsrpCls(c.rsrp)):row("4G cell","not read yet"))
+      +row("Location by SMS",d.sms_on?'on · keyword "'+esc(d.sms_keyword)+'"':"off");
+    const sel=$("tr_day"),cur=sel.value,days=d.days.map(x=>x.day).sort().reverse();
+    sel.innerHTML=days.map(x=>'<option value="'+x+'">'+dayName(x)+'</option>').join("")||'<option value="">No days yet</option>';
+    if(days.includes(cur))sel.value=cur;const changed=cur!=sel.value;
+    if(!trPts.length||changed||sel.value==days[0])loadDay(changed||!trMap)}catch(e){}}
+function parseCsv(t){const L=t.trim().split("\n"),h=L.shift().split(",");
+  return L.map(l=>{const v=l.split(","),o={};h.forEach((k,i)=>o[k]=v[i]===""||v[i]==null?null:(isNaN(+v[i])?v[i]:+v[i]));return o})}
+async function loadDay(refit=true){
+  const d=$("tr_day").value;trPts=[];if(!d){$("tr_info").textContent="";$("tr_chart").innerHTML="";drawMap();return}
+  try{trPts=parseCsv(await (await api("/api/track/day?d="+d)).text())}catch(e){}
+  const fx=trPts.filter(p=>p.lat!=null);let km=0;
+  for(let i=1;i<fx.length;i++){const a=fx[i-1],b=fx[i],R=6371,r=Math.PI/180,x=Math.sin((b.lat-a.lat)*r/2),y=Math.sin((b.lon-a.lon)*r/2);km+=2*R*Math.asin(Math.sqrt(x*x+Math.cos(a.lat*r)*Math.cos(b.lat*r)*y*y))}
+  const sig=trPts.filter(p=>p.rsrp!=null).map(p=>p.rsrp);
+  $("tr_info").textContent=trPts.length+" points, "+fx.length+" with a position · "+km.toFixed(2)+" km"+(sig.length?" · RSRP "+Math.min(...sig)+" to "+Math.max(...sig)+" dBm":"");
+  drawChart();drawMap(refit)}
+function drawChart(){
+  const p=trPts.filter(x=>x.rsrp!=null);if(p.length<2){$("tr_chart").innerHTML='<p class="mut">Not enough signal readings yet.</p>';return}
+  const W=600,H=140,t0=p[0].t,t1=p[p.length-1].t,lo=Math.min(-120,...p.map(x=>x.rsrp)),hi=Math.max(-70,...p.map(x=>x.rsrp)),
+    X=t=>30+(t-t0)/Math.max(1,t1-t0)*(W-38),Y=v=>8+(hi-v)/(hi-lo)*(H-24);
+  const grid=[-80,-90,-100,-110].filter(v=>v>lo&&v<hi).map(v=>'<line x1="30" x2="'+(W-8)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="var(--line)"/><text x="0" y="'+(Y(v)+4)+'" font-size="10" fill="var(--mut)">'+v+'</text>').join("");
+  const tl=[t0,(t0+t1)/2,t1].map((t,i)=>'<text x="'+X(t)+'" y="'+(H-2)+'" font-size="10" fill="var(--mut)" text-anchor="'+["start","middle","end"][i]+'">'+new Date(t*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+'</text>').join("");
+  $("tr_chart").innerHTML='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto">'+grid+tl
+    +'<polyline fill="none" stroke="var(--acc)" stroke-width="1.5" points="'+p.map(x=>X(x.t).toFixed(1)+","+Y(x.rsrp).toFixed(1)).join(" ")+'"/></svg>'}
+function leaflet(){return trLeaflet||(trLeaflet=new Promise((ok,no)=>{if(window.L)return ok();
+  const c=document.createElement("link");c.rel="stylesheet";c.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";document.head.appendChild(c);
+  const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";s.onload=ok;s.onerror=no;document.head.appendChild(s);setTimeout(no,8000)}))}
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim()||"#888";
+async function drawMap(refit=true){
+  const el=$("tr_map"),fx=trPts.filter(p=>p.lat!=null);
+  if(!fx.length){if(trMap){trMap.remove();trMap=null}el.innerHTML='<p class="mut" style="padding:12px">No positions on this day.</p>';return}
+  try{await leaflet();
+    if(!trMap){el.innerHTML="";trMap=L.map(el);L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"}).addTo(trMap)}
+    if(trLayer)trLayer.remove();trLayer=L.layerGroup().addTo(trMap);
+    L.polyline(fx.map(p=>[p.lat,p.lon]),{color:cssVar("--acc"),weight:2,opacity:.6}).addTo(trLayer);
+    fx.forEach(p=>L.circleMarker([p.lat,p.lon],{radius:5,weight:1,color:"#fff",fillOpacity:.9,fillColor:cssVar("--"+rsrpCls(p.rsrp))})
+      .bindPopup(new Date(p.t*1000).toLocaleTimeString()+"<br>"+(p.rsrp!=null?"RSRP "+p.rsrp+" dBm":"no 4G reading")+(p.band?" · band "+p.band:"")+"<br>"+Math.round(p.speed_kmh||0)+" km/h · "+esc(p.uplink||"")).addTo(trLayer));
+    if(refit)trMap.fitBounds(L.latLngBounds(fx.map(p=>[p.lat,p.lon])).pad(.15),{maxZoom:17});setTimeout(()=>trMap.invalidateSize(),50)}
+  catch(e){// No internet for the map library: plain plot.
+    if(trMap){trMap.remove();trMap=null}
+    const W=600,H=340,la=fx.map(p=>p.lat),lo=fx.map(p=>p.lon),a0=Math.min(...la),a1=Math.max(...la),o0=Math.min(...lo),o1=Math.max(...lo),
+      k=Math.cos((a0+a1)/2*Math.PI/180),sx=(o1-o0)*k||1e-4,sy=(a1-a0)||1e-4,s=Math.min((W-40)/sx,(H-40)/sy),
+      X=v=>20+(v-o0)*k*s+((W-40)-sx*s)/2,Y=v=>H-20-(v-a0)*s-((H-40)-sy*s)/2;
+    el.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:100%"><polyline fill="none" stroke="var(--acc)" stroke-opacity=".5" points="'+fx.map(p=>X(p.lon).toFixed(1)+","+Y(p.lat).toFixed(1)).join(" ")+'"/>'
+      +fx.map(p=>'<circle r="4" cx="'+X(p.lon).toFixed(1)+'" cy="'+Y(p.lat).toFixed(1)+'" fill="var(--'+rsrpCls(p.rsrp)+')"><title>'+new Date(p.t*1000).toLocaleTimeString()+(p.rsrp!=null?" · RSRP "+p.rsrp:"")+'</title></circle>').join("")+'</svg>'}}
+async function trackNow(){const r=await jpost("/api/track",{action:"now"});msg("tr_msg",r.message,r.ok?"ok":"bad");setTimeout(()=>{trPts=[];loadTracker()},6000)}
+async function trackDelete(){const d=$("tr_day").value;if(!d||!confirm("Delete the track of "+dayName(d)+"?"))return;
+  const r=await jpost("/api/track",{action:"delete",day:d});msg("tr_msg",r.message,r.ok?"ok":"bad");trPts=[];loadTracker()}
+function trackExport(kind){const d=$("tr_day").value;if(!d)return;
+  if(kind=="csv"){location.href="/api/track/day?d="+d+"&download=1";return}
+  const fx=trPts.filter(p=>p.lat!=null);
+  const gpx='<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="portal-bridge" xmlns="http://www.topografix.com/GPX/1/1"><trk><name>'+dayName(d)+'</name><trkseg>'
+    +fx.map(p=>'<trkpt lat="'+p.lat+'" lon="'+p.lon+'">'+(p.alt_m!=null?'<ele>'+p.alt_m+'</ele>':'')+'<time>'+new Date(p.t*1000).toISOString()+'</time>'+(p.rsrp!=null?'<desc>RSRP '+p.rsrp+' dBm</desc>':'')+'</trkpt>').join("")+'</trkseg></trk></gpx>\n';
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([gpx],{type:"application/gpx+xml"}));a.download="track-"+d+".gpx";a.click()}
+
+tick().then(route);setInterval(()=>{if(page=='devices')loadDevices()},3000);setInterval(()=>{if(page=='tracker')loadTracker()},15000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
 </script>
 </body>
 </html>

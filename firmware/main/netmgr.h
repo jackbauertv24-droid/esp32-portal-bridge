@@ -30,3 +30,5 @@ void netmgr_summary(char *out, size_t cap);
 void netmgr_ap_ip(char *out, size_t cap);
 // The hotspot interface (NULL before netmgr_start).
 esp_netif_t *netmgr_ap_netif(void);
+// Current uplink name: "wifi", "4g", "4g-board" or "none".
+void netmgr_uplink(char *out, size_t cap);

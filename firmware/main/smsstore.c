@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "settings.h"
+#include "tracker.h"
 #include "textutil.h"
 
 #define FILE_CUR "/data/sms.jsonl"
@@ -108,6 +109,7 @@ uint32_t smsstore_add(const char *from, const char *sent, const char *text, int 
   }
   xSemaphoreGive(mtx);
   if (ok) forward_kick();
+  if (ok) tracker_on_sms(from, text);
   if (ok) devlog("sms store: saved #%lu (%d part(s)%s)", (unsigned long)id, parts, otp ? ", login code" : "");
   else devlog("sms store: WRITE FAILED, message stays on the SIM");
   return ok ? id : 0;

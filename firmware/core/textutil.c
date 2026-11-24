@@ -164,3 +164,35 @@ void url_decode_inplace(char *s) {
   }
   *o = 0;
 }
+
+// Digits only, at most the last `keep`.
+static void tail_digits(const char *s, char *out, size_t keep) {
+  char d[40];
+  size_t n = 0;
+  for (; *s && n < sizeof(d) - 1; s++)
+    if (*s >= '0' && *s <= '9') d[n++] = *s;
+  d[n] = 0;
+  snprintf(out, keep + 1, "%s", n > keep ? d + n - keep : d);
+}
+
+int phone_same(const char *a, const char *b) {
+  char x[9], y[9];
+  tail_digits(a, x, 8);
+  tail_digits(b, y, 8);
+  return strlen(x) >= 6 && !strcmp(x, y);
+}
+
+int phone_in_list(const char *num, const char *list) {
+  char item[40];
+  while (list && *list) {
+    size_t n = strcspn(list, ",; ");
+    if (n && n < sizeof(item)) {
+      memcpy(item, list, n);
+      item[n] = 0;
+      if (phone_same(num, item)) return 1;
+    }
+    list += n;
+    while (*list == ',' || *list == ';' || *list == ' ') list++;
+  }
+  return 0;
+}
