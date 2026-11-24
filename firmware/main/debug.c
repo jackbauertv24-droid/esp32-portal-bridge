@@ -144,6 +144,9 @@ static esp_err_t cam_start(framesize_t fs, char *how, size_t hcap, cJSON *log) {
            {20000000, PIXFORMAT_RGB565, "RGB565, 20 MHz clock"},
            {10000000, PIXFORMAT_RGB565, "RGB565, 10 MHz clock"}};
   esp_err_t e = ESP_FAIL;
+  // Frames go straight to PSRAM by DMA, so the driver needs no 16-30 KB
+  // internal buffer (internal RAM is what the Wi-Fi radio needs).
+  esp_camera_set_psram_mode(true);
   for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
     camera_config_t c;
     cam_config(&c, fs, T[i].hz, T[i].pf);
@@ -358,8 +361,10 @@ static esp_err_t h_camdiag(httpd_req_t *req) {
   const char *verdict = "", *kind = "";
 
   size_t ps = esp_psram_get_size();
-  snprintf(d, sizeof(d), "%u MB (picture buffers live here)", (unsigned)(ps >> 20));
-  step(st, "PSRAM", ps > 0, d);
+  snprintf(d, sizeof(d), "%u MB (picture buffers live here); internal RAM free %u KB, largest block %u KB", (unsigned)(ps >> 20),
+           (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+           (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024));
+  step(st, "Memory", ps > 0, d);
 
   battery_suspend();
   int sda = idle_level(CAM_SDA), scl = idle_level(CAM_SCL);

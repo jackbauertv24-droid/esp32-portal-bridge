@@ -460,7 +460,7 @@ static void modem_task(void *arg) {
                       .stop_bits = UART_STOP_BITS_1,
                       .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
                       .source_clk = UART_SCLK_DEFAULT};
-  uart_driver_install(UART, 16384, 2048, 0, NULL, 0);
+  uart_driver_install(UART, 8192, 2048, 0, NULL, 0);  // internal RAM is scarce
   uart_param_config(UART, &uc);
   uart_set_pin(UART, MODEM_UART_TX, MODEM_UART_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
   devlog("modem: UART1 rx=%d tx=%d %d baud, enable GPIO%d held high", MODEM_UART_RX, MODEM_UART_TX, MODEM_BAUD,

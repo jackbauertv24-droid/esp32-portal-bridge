@@ -11,6 +11,7 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_wifi.h"
 #include "events.h"
 #include "freertos/FreeRTOS.h"
@@ -22,6 +23,7 @@
 #include "lte.h"
 #include "mdns.h"
 #include "nvs.h"
+#include "psram_task.h"
 #include "settings.h"
 #include "urlutil.h"
 #include "lwip/inet.h"
@@ -376,7 +378,8 @@ void netmgr_start(void) {
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
   }
   devlog("hotspot: \"%s\" on channel %d, admin at http://%s/", ssid, ac.ap.channel, ap_ip);
-  xTaskCreatePinnedToCore(net_task, "netmgr", 16384, NULL, 4, NULL, 1);
+  // No flash access in this task (Wi-Fi config is kept in RAM), so its stack can be in PSRAM.
+  task_psram(net_task, "netmgr", 16384, NULL, 4, 1);
 }
 
 bool netmgr_sta_connected(void) { return sta_has_ip; }
@@ -487,6 +490,12 @@ cJSON *netmgr_diag_json(void) {
   cfg_get("up_mode", mode, sizeof(mode));
   snprintf(d, sizeof(d), "using %s (mode %s)%s%s", uplink, mode, meter_lte_blocked() ? "; 4G data limit reached" : "",
            cfg_is("lb_mode", "balance") ? "; Wi-Fi + 4G together is on" : "");
+  size_t ifree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL), ibig = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+         imin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  snprintf(d, sizeof(d), "internal RAM free %u KB, largest block %u KB, lowest since start %u KB (the Wi-Fi radio needs internal RAM to send)",
+           (unsigned)(ifree / 1024), (unsigned)(ibig / 1024), (unsigned)(imin / 1024));
+  bool mem_ok = ibig >= 8192 && imin >= 8192;
+  dstep(st, "Board memory", mem_ok, d);
   dstep(st, "Uplink chosen", strcmp(uplink, "none") && strcmp(uplink, "4g-board") ? 1 : 0, d);
 
   net_state_t w = NET_UNKNOWN;
@@ -532,6 +541,7 @@ cJSON *netmgr_diag_json(void) {
   else if (w == NET_CAPTIVE) verdict = "The venue Wi-Fi shows its login page again (sessions expire). Use Login page > Try automatic login now, or log in through the board there.", kind = "venue login";
   else if (w != NET_ONLINE && !dns_ok) verdict = "The venue Wi-Fi gives no internet and its DNS does not answer. The venue network itself may be down or blocking.", kind = "venue network";
   else if (w != NET_ONLINE) verdict = "Joined the venue Wi-Fi but the internet check fails. The venue network may be down, or the check URL blocked.", kind = "venue network";
+  else if (!mem_ok) verdict = "The board is short of internal RAM, so the Wi-Fi radio can drop forwarded traffic. Send a report.", kind = "firmware (memory)";
   else if (strcmp(uplink, "wifi")) verdict = "The Wi-Fi works, but the hotspot is using another uplink. Check Settings > Internet uplink > Uplink mode.", kind = "settings";
   else if (!napt_on) verdict = "The Wi-Fi works but forwarding for hotspot devices is off. This is a firmware fault; send a report.", kind = "firmware";
   else verdict = "The board itself reaches the internet through the Wi-Fi and forwards for hotspot devices. If your phone still has no internet, see the phone check below.", kind = "none";

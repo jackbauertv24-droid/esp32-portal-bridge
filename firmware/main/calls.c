@@ -14,6 +14,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "modem_at.h"
+#include "psram_task.h"
 #include "settings.h"
 #include "textutil.h"
 
@@ -304,7 +305,7 @@ static void task(void *arg) {
 void calls_start(void) {
   mtx = xSemaphoreCreateMutex();
   q = xQueueCreate(32, sizeof(cev_t));
-  xTaskCreatePinnedToCore(task, "calls", 4096, NULL, 4, NULL, 1);
+  task_psram(task, "calls", 4096, NULL, 4, 1);  // AT commands and queues only, no flash access
 }
 
 bool calls_action(const char *a, char *msg, size_t cap) {
