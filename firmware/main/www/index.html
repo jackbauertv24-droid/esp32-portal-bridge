@@ -49,7 +49,7 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
 <header>
   <div class="top"><span class="dot" id="dot"></span><b>Portal Bridge</b><small id="fw"></small></div>
   <nav id="nav">
-    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#devices">Devices</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
+    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#devices">Devices</a><a href="#survey">Wi-Fi survey</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
   </nav>
 </header>
 <main>
@@ -275,6 +275,29 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
     <p class="mut">Turn on <b>Settings › Hotspot › Alert when a new device joins</b> to be told through Telegram, webhook or MQTT.</p>
   </div>
 </section>
+<section id="p-survey" class="hidden">
+  <div class="card">
+    <h2>Wi-Fi survey</h2>
+    <p class="mut">Scans every 2.4 GHz channel for about 2 seconds; devices on the hotspot pause briefly during a scan.</p>
+    <div class="row"><button onclick="survey()">Scan now</button>
+      <label class="chk" style="margin:8px 0 0"><input type="checkbox" id="sv_watch" onchange="surveyWatch()"><span>Rescan every 15 s</span></label></div>
+    <div class="msg" id="sv_msg"></div>
+  </div>
+  <div class="card">
+    <h2>Channels</h2>
+    <div class="help">Bar height: how crowded each channel is (more and stronger networks = higher). A network also disturbs the two channels on each side.</div>
+    <div id="sv_chan" style="display:flex;align-items:flex-end;gap:4px;height:120px;margin-top:10px"></div>
+    <div id="sv_chan_lbl" style="display:flex;gap:4px;font-size:11px;color:var(--mut)"></div>
+    <p id="sv_rec" class="mut"></p>
+  </div>
+  <div class="card">
+    <div class="row"><h2 style="margin:0;flex:1">Networks</h2>
+      <select id="sv_sort" style="width:auto" onchange="renderSurvey()"><option value="rssi">Strongest first</option><option value="channel">By channel</option><option value="ssid">By name</option></select></div>
+    <input id="sv_q" placeholder="Filter by name" style="margin-top:8px" oninput="renderSurvey()">
+    <div class="chk"><input type="checkbox" id="sv_open" onchange="renderSurvey()"><span>Open networks only (no password; venues with login pages are usually open)</span></div>
+    <div id="sv_list" class="mut" style="margin-top:8px">Press Scan now.</div>
+  </div>
+</section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -291,7 +314,7 @@ function go(p){location.hash=p}
 function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
 function route(){
   page=(location.hash||'#status').slice(1);
-  if(!['status','portal','sms','data','devices','settings','tools','debug'].includes(page))page='status';
+  if(!['status','portal','sms','data','devices','survey','settings','tools','debug'].includes(page))page='status';
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
   document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
   if(st&&!st.board.setup_done)return showSetup();
@@ -578,6 +601,50 @@ async function devAct(i,action){const d=devs[i];if(!d)return;const body={mac:d.m
   if(action=="name"){const n=prompt("Name for this device (empty = automatic):",d.name||d.host||"");if(n===null)return;body.name=n.trim().slice(0,31)}
   if(action=="block"&&!confirm("Block internet for "+devLabel(d)+"?"))return;
   const r=await jpost("/api/devices",body);msg("dv_msg",r.message,r.ok?"ok":"bad");loadDevices()}
+
+let sv=null,svHist={},svTimer=null;
+function bars(r){return r>=-55?"▂▄▆█":r>=-67?"▂▄▆":r>=-75?"▂▄":"▂"}
+async function survey(){
+  msg("sv_msg","Scanning…");
+  try{const r=await (await api("/api/wifi/survey")).json();
+    if(r.error){msg("sv_msg",r.error,"bad");return}
+    sv=r;const t=Date.now();
+    r.networks.forEach(n=>{const h=svHist[n.bssid]||(svHist[n.bssid]={min:n.rssi,max:n.rssi,count:0});h.min=Math.min(h.min,n.rssi);h.max=Math.max(h.max,n.rssi);h.count++;h.last=t});
+    msg("sv_msg",r.networks.length+" networks"+(r.seen>r.networks.length?" (showing the strongest "+r.networks.length+" of "+r.seen+")":"")+" · "+new Date().toLocaleTimeString(),"ok");
+    renderSurvey()}catch(e){msg("sv_msg","Scan failed: "+e,"bad")}}
+function surveyWatch(){clearInterval(svTimer);if($("sv_watch").checked){survey();svTimer=setInterval(()=>{if(page!="survey"){$("sv_watch").checked=false;clearInterval(svTimer);return}survey()},15000)}}
+function chanLoad(nets){
+  const load=Array(14).fill(0),count=Array(14).fill(0);
+  nets.forEach(n=>{const w=Math.max(0,n.rssi+95),lo=n.channel-2+(n.second<0?-4:0),hi=n.channel+2+(n.second>0?4:0);
+    for(let c=Math.max(1,lo);c<=Math.min(13,hi);c++){load[c]+=w*(c==n.channel?1:0.5)}count[n.channel]++});
+  return {load,count}}
+function renderSurvey(){
+  if(!sv)return;const {load,count}=chanLoad(sv.networks),max=Math.max(1,...load.slice(1));
+  $("sv_chan").innerHTML=load.slice(1).map((v,i)=>{const c=i+1,mine=c==sv.radio_channel;
+    return '<div title="channel '+c+': '+count[c]+' networks" style="flex:1;height:'+Math.max(2,v/max*100)+'%;background:var(--'+(mine?'warn':'acc')+');opacity:'+([1,6,11].includes(c)?1:.55)+';border-radius:3px 3px 0 0"></div>'}).join("");
+  $("sv_chan_lbl").innerHTML=load.slice(1).map((v,i)=>'<div style="flex:1;text-align:center">'+(i+1)+'<br>'+count[i+1]+'</div>').join("");
+  const best=[1,6,11].sort((a,b)=>load[a]-load[b])[0];
+  $("sv_rec").innerHTML="Least crowded of the non-overlapping channels 1, 6 and 11: <b>"+best+"</b>. "
+    +(sv.upstream_bssid?"The board's radio is on channel <b>"+sv.radio_channel+"</b> (orange) because it follows the upstream Wi-Fi; the hotspot channel setting only applies without an upstream network.":"Set it under Settings › Hotspot › Channel (now "+sv.ap_channel_setting+", applies after a restart).");
+  const q=$("sv_q").value.trim().toLowerCase(),so=$("sv_sort").value,openOnly=$("sv_open").checked;
+  let list=sv.networks.filter(n=>(!q||n.ssid.toLowerCase().includes(q))&&(!openOnly||n.open));
+  list.sort(so=="channel"?(a,b)=>a.channel-b.channel||b.rssi-a.rssi:so=="ssid"?(a,b)=>a.ssid.localeCompare(b.ssid)||b.rssi-a.rssi:(a,b)=>b.rssi-a.rssi);
+  $("sv_list").innerHTML=list.length?list.map(n=>{const h=svHist[n.bssid],saved=sv.saved.indexOf(n.ssid),cur=n.bssid==sv.upstream_bssid;
+    return '<div class="sms"><b>'+(n.ssid?esc(n.ssid):'<i class="mut">hidden name</i>')+'</b>'
+      +(cur?'<span class="tag ok">connected</span>':'')+(saved>=0&&n.ssid?'<span class="tag">saved as network '+(saved+1)+'</span>':'')
+      +(n.open?'<span class="tag warn">open</span>':'')+(n.auth=="WEP"?'<span class="tag bad">WEP (insecure)</span>':'')
+      +'<div><span style="font-family:monospace">'+bars(n.rssi)+'</span> '+n.rssi+' dBm'+(h&&h.count>1?' <span class="mut">(seen '+h.min+' to '+h.max+')</span>':'')
+      +' · channel '+n.channel+(n.second?' (40 MHz, also '+(n.channel+4*n.second)+')':'')+'</div>'
+      +'<div class="help">'+esc(n.auth)+(n.cipher!="none"?' · '+esc(n.cipher):'')+(n.phy?' · 802.11'+esc(n.phy):'')+(n.wps?' · WPS':'')+(n.country?' · '+esc(n.country):'')+' · '+esc(n.bssid)+'</div>'
+      +(n.ssid&&saved<0?'<button class="sec" onclick="useNet('+esc(JSON.stringify(n.ssid))+','+n.open+')">Use as upstream Wi-Fi</button>':'')
+      +'</div>'}).join(""):"Nothing matches."}
+async function useNet(ssid,open){
+  const d=await (await api("/api/settings")).json(),v=d.values;let slot=[1,2,3].find(i=>!v["w"+i+"_ssid"]);
+  if(!slot){if(!confirm("All three upstream networks are set. Replace network 3 ("+v.w3_ssid+")?"))return;slot=3}
+  let pass="";if(!open){pass=prompt("Password for "+ssid+":");if(pass===null)return}
+  const body={};body["w"+slot+"_ssid"]=ssid;body["w"+slot+"_pass"]=pass;
+  const r=await jpost("/api/settings",body);msg("sv_msg",r.ok?"Saved as upstream network "+slot+". The board tries the list in order, so it may take a moment to switch.":r.message,r.ok?"ok":"bad");
+  if(r.ok){sv.saved[slot-1]=ssid;renderSurvey()}}
 
 tick().then(route);setInterval(()=>{if(page=='devices')loadDevices()},3000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
 </script>

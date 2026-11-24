@@ -28,6 +28,7 @@
 #include "report.h"
 #include "settings.h"
 #include "smsstore.h"
+#include "survey.h"
 #include "web.h"
 
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -492,6 +493,11 @@ static esp_err_t h_scan(httpd_req_t *req) {
   return send_json(req, arr);
 }
 
+static esp_err_t h_survey(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, survey_json());
+}
+
 static esp_err_t h_update(httpd_req_t *req) {
   if (gate(req) != ESP_OK) return ESP_OK;
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
@@ -652,6 +658,7 @@ void web_start(void) {
       {"/api/forward/test", HTTP_POST, h_forward_test},
       {"/api/telegram/chats", HTTP_GET, h_tg_chats},
       {"/api/wifi/scan", HTTP_GET, h_scan},
+      {"/api/wifi/survey", HTTP_GET, h_survey},
       {"/api/wifi/reconnect", HTTP_POST, h_wifi_reconnect},
       {"/api/update", HTTP_POST, h_update},
       {"/api/reboot", HTTP_POST, h_reboot},
