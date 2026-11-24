@@ -15,6 +15,7 @@ typedef struct {
   int id;
   time_t t;
   char text[200];
+  char detail[80];  // forwarded only; kept out of the log, the event list and reports
   int sent;
 } ev_t;
 
@@ -24,12 +25,7 @@ static SemaphoreHandle_t mtx;
 
 void events_init(void) { mtx = xSemaphoreCreateMutex(); }
 
-void event_post(const char *fmt, ...) {
-  char text[200];
-  va_list ap;
-  va_start(ap, fmt);
-  vsnprintf(text, sizeof(text), fmt, ap);
-  va_end(ap);
+static void post(const char *detail, const char *text) {
   devlog("EVENT %s", text);
   xSemaphoreTake(mtx, portMAX_DELAY);
   ev_t *slot = &evs[0];
@@ -39,7 +35,26 @@ void event_post(const char *fmt, ...) {
   slot->t = time(NULL);
   slot->sent = 0;
   snprintf(slot->text, sizeof(slot->text), "%s", text);
+  snprintf(slot->detail, sizeof(slot->detail), "%s", detail ? detail : "");
   xSemaphoreGive(mtx);
+}
+
+void event_post(const char *fmt, ...) {
+  char text[200];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(text, sizeof(text), fmt, ap);
+  va_end(ap);
+  post(NULL, text);
+}
+
+void event_post_detail(const char *detail, const char *fmt, ...) {
+  char text[200];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(text, sizeof(text), fmt, ap);
+  va_end(ap);
+  post(detail, text);
 }
 
 cJSON *events_json(void) {
@@ -67,7 +82,7 @@ int events_next_unsent(char *out, int cap, int *id) {
       struct tm tm;
       localtime_r(&evs[i].t, &tm);
       if (evs[i].t > 1600000000) strftime(ts, sizeof(ts), "%m-%d %H:%M ", &tm);
-      snprintf(out, cap, "%s%s", ts, evs[i].text);
+      snprintf(out, cap, "%s%s%s", ts, evs[i].text, evs[i].detail);
       found = 1;
     }
   xSemaphoreGive(mtx);

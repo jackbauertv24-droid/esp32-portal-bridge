@@ -49,7 +49,7 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
 <header>
   <div class="top"><span class="dot" id="dot"></span><b>Portal Bridge</b><small id="fw"></small></div>
   <nav id="nav">
-    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
+    <a href="#status">Status</a><a href="#portal">Login page</a><a href="#sms">SMS</a><a href="#data">Data</a><a href="#devices">Devices</a><a href="#settings">Settings</a><a href="#tools">Tools</a><a href="#debug">Debug</a>
   </nav>
 </header>
 <main>
@@ -261,6 +261,20 @@ details summary{cursor:pointer;color:var(--acc);margin-top:8px}
     <button class="danger" onclick="dataReset('all')">Reset everything</button>
   </div>
 </section>
+<section id="p-devices" class="hidden">
+  <div class="card">
+    <h2>Devices on the hotspot</h2>
+    <div class="help" id="dv_head"></div>
+    <div id="dv_list">Loading…</div>
+    <div class="msg" id="dv_msg"></div>
+  </div>
+  <div class="card">
+    <h2>About</h2>
+    <p class="mut">Names come from the device itself when it joins (most phones send one); rename any device here. Phones often use a <b>private address</b> that changes per network or over time, so the same phone can show up again as a new device.</p>
+    <p class="mut"><b>Block</b> stops a device's internet but keeps it connected (it can still open this admin page, which is password protected). <b>Disconnect</b> drops it once; it may join again by itself. Data counts are since the device was first seen and are saved every 10 minutes.</p>
+    <p class="mut">Turn on <b>Settings › Hotspot › Alert when a new device joins</b> to be told through Telegram, webhook or MQTT.</p>
+  </div>
+</section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -277,12 +291,13 @@ function go(p){location.hash=p}
 function showSetup(){$('setup').classList.remove('hidden');document.querySelectorAll('main>section:not(#setup)').forEach(s=>s.classList.add('hidden'));$('nav').classList.add('hidden')}
 function route(){
   page=(location.hash||'#status').slice(1);
-  if(!['status','portal','sms','data','settings','tools','debug'].includes(page))page='status';
+  if(!['status','portal','sms','data','devices','settings','tools','debug'].includes(page))page='status';
   document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+page));
   document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!='p-'+page));
   if(st&&!st.board.setup_done)return showSetup();
   if(page=='sms')loadSms();
   if(page=='data')renderData();
+  if(page=='devices')loadDevices();
   if(page=='settings')loadSettings();
   if(page=='portal'){loadRecipe();loadRecs();renderPortal()}
 }
@@ -298,7 +313,7 @@ async function tick(){
     $('t_net').innerHTML=row('Hotspot uses',n.uplink=='none'?'no uplink':n.uplink=='4g-board'?'nothing - 4G data limit reached':(n.uplink=='4g'?'4G':'Wi-Fi')+(n.online?' · online':' · no internet'),n.online&&n.uplink!='4g-board'?'ok':'bad')+(st.data?row('4G data this period',dataLine(st.data),st.data.blocked?'bad':''):'')
       +row('Upstream Wi-Fi',n.wifi_connected?esc(n.wifi_ssid)+' ('+n.wifi_rssi+' dBm) · '+esc(n.wifi_state):'not connected',n.wifi_state=='online'?'ok':(n.wifi_state=='login page'?'warn':''))
       +row('4G data',!l.enabled?'off in settings':(l.up?'connected · '+esc(n.lte_state)+' · up '+dur(l.up_s):'not connected'),l.up?'ok':'warn')
-      +(st.lb?row('Wi-Fi + 4G together',st.lb.mode=='off'?'off':(st.lb.active?'active · Wi-Fi '+st.lb.wifi_pct+'% / 4G '+(100-st.lb.wifi_pct)+'% · packets '+st.lb.packets_wifi+' / '+st.lb.packets_4g:'on, waiting for both uplinks to be online'),st.lb.active?'ok':''):'')+row('Devices on hotspot',n.clients)+row('Admin address','http://'+esc(n.ap_ip)+'/');
+      +(st.lb?row('Wi-Fi + 4G together',st.lb.mode=='off'?'off':(st.lb.active?'active · Wi-Fi '+st.lb.wifi_pct+'% / 4G '+(100-st.lb.wifi_pct)+'% · packets '+st.lb.packets_wifi+' / '+st.lb.packets_4g:'on, waiting for both uplinks to be online'),st.lb.active?'ok':''):'')+row('Devices on hotspot','<a href="#devices">'+n.clients+'</a>')+row('Admin address','http://'+esc(n.ap_ip)+'/');
     renderPortal();
     $('t_modem').innerHTML=row('Modem',m.alive?'answering':'not answering — check the 4G DIP switch',m.alive?'ok':'bad')
       +(m.alive?row('SIM',esc(m.sim),m.sim=='READY'?'ok':'bad')+row('Operator',esc(m.operator||'–'))
@@ -539,7 +554,32 @@ async function dataAllow(){const r=await jpost("/api/data/allow");msg("dm_msg",r
 async function dataReset(s){if(!confirm(s=="all"?"Clear ALL data counters and history?":"Clear this period's counters?"))return;
   const r=await jpost("/api/data/reset?scope="+s);msg("dm_msg",r.message,r.ok?"ok":"bad");await tick();renderData()}
 
-tick().then(route);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
+const fmtB=b=>b>=1073741824?(b/1073741824).toFixed(2)+" GB":b>=1048576?(b/1048576).toFixed(1)+" MB":b>=1024?(b/1024).toFixed(0)+" KB":b+" B";
+const fmtR=r=>{const bits=r*8;return bits>=1e6?(bits/1e6).toFixed(1)+" Mbit/s":bits>=1e3?(bits/1e3).toFixed(0)+" kbit/s":bits+" bit/s"};
+let devs=[];
+function devLabel(d){return d.name||d.host||d.vendor||"Unnamed device"}
+async function loadDevices(){
+  try{const r=await (await api("/api/devices")).json();devs=r.devices;
+    devs.sort((a,b)=>(b.connected-a.connected)||(b.last_seen-a.last_seen));
+    const on=devs.filter(d=>d.connected).length;
+    $("dv_head").textContent=on+" connected of "+r.max_devices+" allowed · "+devs.length+" remembered"+(r.dropped_packets?" · "+r.dropped_packets+" packets from blocked devices dropped":"");
+    $("dv_list").innerHTML=devs.length?devs.map((d,i)=>'<div class="sms">'
+      +'<b>'+esc(devLabel(d))+'</b>'+(d.connected?'<span class="tag ok">connected</span>':'<span class="tag">offline</span>')
+      +(d.blocked?'<span class="tag bad">blocked</span>':'')+(d.random_mac?'<span class="tag">private address</span>':'')
+      +'<div class="help">'+(d.connected?esc(d.ip||"no address yet")+' · '+d.rssi+' dBm · connected '+dur(d.connected_s):'last seen '+(d.last_seen?ago(d.last_seen):'before the clock was set'))
+      +' · '+esc(d.mac)+(d.name&&d.host?' · calls itself '+esc(d.host):'')+'</div>'
+      +(d.connected?'<div>Now ↓ '+fmtR(d.rate_down)+' ↑ '+fmtR(d.rate_up)+' · this visit ↓ '+fmtB(d.session_down)+' ↑ '+fmtB(d.session_up)+'</div>':'')
+      +'<div class="mut">All time ↓ '+fmtB(d.down)+' ↑ '+fmtB(d.up)+'</div>'
+      +'<div class="row"><button class="sec" onclick="devAct('+i+',\'name\')">Rename</button>'
+      +(d.blocked?'<button class="sec" onclick="devAct('+i+',\'unblock\')">Unblock</button>':'<button class="danger" onclick="devAct('+i+',\'block\')">Block</button>')
+      +(d.connected?'<button class="sec" onclick="devAct('+i+',\'kick\')">Disconnect</button>':'<button class="sec" onclick="devAct('+i+',\'forget\')">Forget</button>')
+      +'</div></div>').join(""):"No device has joined the hotspot yet."}catch(e){}}
+async function devAct(i,action){const d=devs[i];if(!d)return;const body={mac:d.mac,action};
+  if(action=="name"){const n=prompt("Name for this device (empty = automatic):",d.name||d.host||"");if(n===null)return;body.name=n.trim().slice(0,31)}
+  if(action=="block"&&!confirm("Block internet for "+devLabel(d)+"?"))return;
+  const r=await jpost("/api/devices",body);msg("dv_msg",r.message,r.ok?"ok":"bad");loadDevices()}
+
+tick().then(route);setInterval(()=>{if(page=='devices')loadDevices()},3000);setInterval(()=>{if(page=='status'||page=='portal'||page=='data')tick().then(()=>{if(page=='data')renderData()})},5000);
 </script>
 </body>
 </html>

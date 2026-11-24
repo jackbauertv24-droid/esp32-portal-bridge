@@ -6,6 +6,7 @@
 
 #include "battery.h"
 #include "build_info.h"
+#include "devices.h"
 #include "devlog.h"
 #include "esp_event.h"
 #include "esp_mac.h"
@@ -58,6 +59,7 @@ void app_main(void) {
   battery_init();
   led_start();
   netmgr_start();
+  devices_start();
   web_start();
   modem_uart_start();
   lte_start();

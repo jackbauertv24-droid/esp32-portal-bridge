@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "devices.h"
 #include "devlog.h"
 #include "esp_netif_net_stack.h"
 #include "events.h"
@@ -28,7 +29,7 @@ static volatile uint32_t rx_w, tx_w, rx_l, tx_l;
 int pb_input_hook(struct pbuf *p, struct netif *inp) {
   if (inp && inp == m_lte) rx_l += p->tot_len;
   else if (inp && inp == m_wifi) rx_w += p->tot_len;
-  return 0;  // never consume the packet
+  return devices_input_hook(p, inp);  // drops only packets of blocked devices
 }
 
 static err_t out_wifi(struct netif *n, struct pbuf *p, const ip4_addr_t *a) {

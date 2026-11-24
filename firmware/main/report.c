@@ -8,6 +8,7 @@
 
 #include "battery.h"
 #include "build_info.h"
+#include "devices.h"
 #include "devlog.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -134,6 +135,8 @@ char *report_build(void) {
   forward_summary(sum, 2048);
   put(&s, sum);
   meter_summary(sum, 2048);
+  put(&s, sum);
+  devices_summary(sum, 2048);
   put(&s, sum);
   free(sum);
 

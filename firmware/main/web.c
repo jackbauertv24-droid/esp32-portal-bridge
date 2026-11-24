@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
 #include "debug.h"
+#include "devices.h"
 #include "meter.h"
 #include "mirror.h"
 #include "modem_at.h"
@@ -554,6 +555,35 @@ static esp_err_t h_data_reset(httpd_req_t *req) {
   return send_result(req, true, !strcmp(scope, "all") ? "All data counters cleared." : "This period's counters cleared.");
 }
 
+static esp_err_t h_devices(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  return send_json(req, devices_json());
+}
+
+// POST {mac, action: "name"|"block"|"unblock"|"kick"|"forget", name}
+static esp_err_t h_devices_post(httpd_req_t *req) {
+  if (gate(req) != ESP_OK) return ESP_OK;
+  char *b = read_body(req, 1024);
+  cJSON *o = b ? cJSON_Parse(b) : NULL;
+  free(b);
+  const char *mac = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "mac")) : NULL;
+  const char *act = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "action")) : NULL;
+  const char *name = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "name")) : NULL;
+  char err[160] = "";
+  bool ok = false;
+  const char *done = "";
+  if (!mac || !act) snprintf(err, sizeof(err), "missing device or action");
+  else if (!strcmp(act, "name")) ok = devices_set(mac, name ? name : "", -1, err, sizeof(err)), done = "Name saved.";
+  else if (!strcmp(act, "block")) ok = devices_set(mac, NULL, 1, err, sizeof(err)), done = "Blocked: this device has no internet through the hotspot.";
+  else if (!strcmp(act, "unblock")) ok = devices_set(mac, NULL, 0, err, sizeof(err)), done = "Unblocked.";
+  else if (!strcmp(act, "kick")) ok = devices_kick(mac, err, sizeof(err)), done = err;
+  else if (!strcmp(act, "forget")) ok = devices_forget(mac, err, sizeof(err)), done = "Removed from the list.";
+  else snprintf(err, sizeof(err), "unknown action");
+  esp_err_t e = send_result(req, ok, ok ? done : err);
+  cJSON_Delete(o);
+  return e;
+}
+
 static esp_err_t h_reboot(httpd_req_t *req) {
   if (auth(req) != ESP_OK) return ESP_OK;
   send_result(req, true, "Restarting.");
@@ -578,7 +608,7 @@ static esp_err_t h_any(httpd_req_t *req) {
 void web_start(void) {
   httpd_config_t c = HTTPD_DEFAULT_CONFIG();
   c.stack_size = 24576;
-  c.max_uri_handlers = 64;
+  c.max_uri_handlers = 80;
   c.max_open_sockets = 7;
   c.lru_purge_enable = true;
   c.recv_wait_timeout = 30;
@@ -627,6 +657,8 @@ void web_start(void) {
       {"/api/reboot", HTTP_POST, h_reboot},
       {"/api/data/allow", HTTP_POST, h_data_allow},
       {"/api/data/reset", HTTP_POST, h_data_reset},
+      {"/api/devices", HTTP_GET, h_devices},
+      {"/api/devices", HTTP_POST, h_devices_post},
   };
   for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
     httpd_uri_t u = {.uri = routes[i].uri, .method = routes[i].m, .handler = routes[i].h};

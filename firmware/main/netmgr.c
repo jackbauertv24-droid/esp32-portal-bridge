@@ -129,10 +129,10 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
     recheck_now = true;
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
     wifi_event_ap_staconnected_t *e = data;
-    devlog("hotspot: device " MACSTR " joined", MAC2STR(e->mac));
+    devlog("hotspot: device ..:%02x:%02x joined", e->mac[4], e->mac[5]);
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
     wifi_event_ap_stadisconnected_t *e = data;
-    devlog("hotspot: device " MACSTR " left", MAC2STR(e->mac));
+    devlog("hotspot: device ..:%02x:%02x left", e->mac[4], e->mac[5]);
   }
 }
 
@@ -333,6 +333,7 @@ void netmgr_start(void) {
 }
 
 bool netmgr_sta_connected(void) { return sta_has_ip; }
+esp_netif_t *netmgr_ap_netif(void) { return ap_if; }
 net_state_t netmgr_wifi_state(void) { return wifi_state; }
 void netmgr_portal_url(char *out, size_t cap) { snprintf(out, cap, "%s", portal_url); }
 void netmgr_recheck(void) { recheck_now = true; }

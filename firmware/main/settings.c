@@ -37,6 +37,7 @@ static const def_t DEFS[] = {
      "the upstream channel (one radio).", T_INT, "6", 1, 13, NULL, true},
     {"ap_hidden", "Hotspot", "Hide hotspot name", NULL, T_BOOL, "0", 0, 0, NULL, true},
     {"ap_maxcli", "Hotspot", "Max devices", NULL, T_INT, "8", 1, 10, NULL, true},
+    {"dev_alert", "Hotspot", "Alert when a new device joins", "Sent through the forwarding channels the first time a device is seen. The device name goes only to those channels, not into reports.", T_BOOL, "0", 0, 0, NULL, false},
     {"ap_ip", "Hotspot", "Admin address", "Gateway address of the hotspot and of this admin page. If an upstream "
      "network uses the same range, the board moves to 10.42.0.1 automatically and logs it.", T_STR, "192.168.0.1",
      7, 15, "ip", true},
